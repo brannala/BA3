@@ -19,9 +19,10 @@ struct globalArgs {
 	int genotypes;
 	int trace;
 	int debug;
+	int nolikelihood;
 } gArgs;
 
-static const char *optString = "s:i:n:b:o:m:a:f:vugtdh?";
+static const char *optString = "s:i:n:b:o:m:a:f:vugtdph?";
 
 static const struct option longOpts[] = {
 	{ "seed", required_argument, NULL, 's' },
@@ -38,6 +39,7 @@ static const struct option longOpts[] = {
 	{ "debug", no_argument, NULL, 'd' },
 	{ "help", no_argument, NULL, 'h' },
 	{ "trace", no_argument, NULL, 't' },
+	{ "nolikelihood", no_argument, NULL, 'p'},
 	{ NULL, no_argument, NULL, 0 }
 };
 
@@ -87,9 +89,9 @@ int main( int argc, char *argv[] )
 
 	int opt = 0;
 	int longIndex = 0;
-	
+
 	/* Initialize gArgs */
-	
+
 	gArgs.seed = 10;
 	gArgs.mciter = 1000000;
 	gArgs.sampling = 100;
@@ -102,26 +104,28 @@ int main( int argc, char *argv[] )
 	gArgs.genotypes = 0;
 	gArgs.trace = 0;
 	gArgs.debug = 0;
+	gArgs.nolikelihood=0;
 	gArgs.usingOutfile = 1;
+
 	strcpy(gArgs.outfileName,"BA3out.txt");
-	
+
 	/* parse command line options */
-	
+
 	opt = getopt_long( argc, argv, optString, longOpts, &longIndex );
 	while( opt != -1 ) {
 		switch( opt ) {
 			case 's':
 				gArgs.seed = atoi(optarg);	/* true */
 				break;
-				
+
 			case 'i':
 				gArgs.mciter = atoi(optarg);
 				break;
-				
+
 			case 'n':
 				gArgs.sampling = atoi(optarg);
 				break;
-				
+
 			case 'b':
 				gArgs.burnin = atoi(optarg);
 				break;
@@ -133,7 +137,7 @@ int main( int argc, char *argv[] )
 			case 'm':
 				gArgs.deltaM = atof(optarg);
 				break;
-				
+
 			case 'a':
 				gArgs.deltaA = atof(optarg);
 				break;
@@ -153,80 +157,89 @@ int main( int argc, char *argv[] )
 			case 'g':
 				gArgs.genotypes++;
 				break;
-				
+
 			case 't':
 				gArgs.trace++;
 				break;
-			
+
+			case 'p':
+				gArgs.nolikelihood++;
+				break;
+
 			case 'd':
 				gArgs.debug++;
 				break;
-				
+
 			case 'h':
-				std::cout << "usage: BA3 [-sinbomaf] [-vhugt] file ..." << "\n" << "    mcmc analysis of recent migration rates\n";
+				std::cout << "usage: BA3 [-sinbomaf] [-vhugpt] file ..." << "\n" << "    mcmc analysis of recent migration rates\n";
 				exit(0);
-				
+
 			case '?':
-				std::cout << "usage: BA3 [-sinbomaf] [-vhugt] file ..." << "\n" << "    mcmc analysis of recent migration rates\n";
+				std::cout << "usage: BA3 [-sinbomaf] [-vhugpt] file ..." << "\n" << "    mcmc analysis of recent migration rates\n";
 				exit(0);
-				
+
 			default:
 				/* You won't actually get here. */
 				break;
 		}
-		
+
 		opt = getopt_long( argc, argv, optString, longOpts, &longIndex );
 	}
-	
+
 	/* get input file name */
-	
+
 	if (optind < argc)
 	{
 		strcpy(infileName,argv[optind]);
 	}
-	else 
+	else
 	{
 		std::cout << "error: no input file specified...\n";
 		exit(1);
 	}
 
 	printBanner();
-	
+
 	unsigned long int mciter=gArgs.mciter;
 	unsigned long int aSeed=gArgs.seed;
 
-	if (gArgs.usingOutfile) 
+	if (gArgs.usingOutfile)
 	{
-		mcmcout.open(gArgs.outfileName, std::ios::out);	
+		mcmcout.open(gArgs.outfileName, std::ios::out);
 	}
-	
+
 	if (gArgs.trace)
 	{
 		tracefile.open("BA3trace.txt", std::ios::out);
 	}
 
-	if (gArgs.genotypes) 
+	if (gArgs.genotypes)
 	{
-		indivout.open("BA3indiv.txt", std::ios::out);	
+		indivout.open("BA3indiv.txt", std::ios::out);
 	}
-	
-	mcmcin.open(infileName, std::ios::in);	
-	if (!mcmcin) 
+
+	if (gArgs.nolikelihood)
+	{
+		NOLIKELIHOOD=true;
+	}
+
+	mcmcin.open(infileName, std::ios::in);
+	if (!mcmcin)
 	{
 		std::cerr << "\nerror: cannot open file: "  << infileName << " quitting...\n";
 		exit(1);
 	}
 
-	
+
 	// initialize gsl random number generator and specify a seed
 	r = gsl_rng_alloc (gsl_rng_taus);
 	gsl_rng_set(r,aSeed);
-	
+
 	// initialize dynamic structures for data and parameters
 
 	indiv *sampleIndiv = new indiv[MAXINDIV];
 	if(sampleIndiv==NULL) cerr << "ran out of memory";
-	
+
 	// check that proposal step parameters are sane (e.g., <0 and <=1)
 	  if((gArgs.deltaM<=0)||(gArgs.deltaM>1))
 	    { std::cerr << "\nerror: deltaM=" << gArgs.deltaM << " not in interval (0,1]. "  << infileName << " quitting...\n";
@@ -237,13 +250,13 @@ int main( int argc, char *argv[] )
 	  if((gArgs.deltaF<=0)||(gArgs.deltaF>1))
 	    { std::cerr << "\nerror: deltaF=" << gArgs.deltaF << " not in interval (0,1]. "  << infileName << " quitting...\n";
 	      exit(1); }
-	
+
 	vector<int> missingData;
-	
+
 
 	// read input file
 	readInputFile(sampleIndiv, noIndiv, noLoci, noPopln, noAlleles);
-	
+
 	double ***ancP;
 	if((ancP = new double**[noIndiv])==0) cerr << "ran out of memory";
 	for(unsigned int i = 0; i < noIndiv; i++)
@@ -252,9 +265,9 @@ int main( int argc, char *argv[] )
 		for(unsigned int j = 0; j < noPopln; j++)
 			ancP[i][j] = new double[3];
 	}
-	
-	
-	for (unsigned int j=0; j<noIndiv; j++) 
+
+
+	for (unsigned int j=0; j<noIndiv; j++)
 	{
 		for(unsigned int l=0;l<noPopln;l++)
 		{
@@ -263,14 +276,14 @@ int main( int argc, char *argv[] )
 			ancP[j][l][2]=0.0;
 		}
 	}
-	
-	
-	
+
+
+
 	// identify missing data and initialize imputed genotypes
 	for (unsigned int i=0; i<noIndiv; i++)
 	{
 		bool hasMissing=false;
-		for (unsigned int j=0; j<noLoci; j++) 
+		for (unsigned int j=0; j<noLoci; j++)
 		{
 		  if((sampleIndiv[i].genotype[j][0] == -1)||(sampleIndiv[i].genotype[j][1] == -1))
 		     {
@@ -286,11 +299,11 @@ int main( int argc, char *argv[] )
 		     }
 		}
 	}
-	
-	size_t N=noIndiv; 
+
+	size_t N=noIndiv;
 	gsl_permutation * p = gsl_permutation_alloc (N);
 
-	if (gArgs.verbose) 
+	if (gArgs.verbose)
 	{
 		cout << "\nInput file: " << infileName;
 		cout << "\nOutput file: " << gArgs.outfileName << "\n";
@@ -301,7 +314,7 @@ int main( int argc, char *argv[] )
 		{
 			string locusName;
 			IndivMap::iterator iterLocus = locusIDMap.begin();
-			while (iterLocus != locusIDMap.end()) 
+			while (iterLocus != locusIDMap.end())
 			{
 				if(iterLocus->second == l)
 					locusName=iterLocus->first;
@@ -312,8 +325,8 @@ int main( int argc, char *argv[] )
 		}
 		cout << "\n\n";
 	}
-	
-	
+
+
 	double ***alleleFreqs;
 	alleleFreqs = new double**[noPopln];
 	for(unsigned int i = 0; i < noPopln; i++)
@@ -322,7 +335,7 @@ int main( int argc, char *argv[] )
 		for(unsigned int j = 0; j < noLoci; j++)
 			alleleFreqs[i][j] = new double[MAXALLELE];
 	}
-	
+
 	double ***avgAlleleFreqs;
 	avgAlleleFreqs = new double**[noPopln];
 	for(unsigned int i = 0; i < noPopln; i++)
@@ -331,7 +344,7 @@ int main( int argc, char *argv[] )
 		for(unsigned int j = 0; j < noLoci; j++)
 			avgAlleleFreqs[i][j] = new double[MAXALLELE];
 	}
-	
+
 	for(unsigned int l = 0; l < noPopln; l++)
 		for(unsigned int i = 0; i < noLoci; i++)
 			for(unsigned int j = 0; j < noAlleles[i]; j++)
@@ -345,35 +358,35 @@ int main( int argc, char *argv[] )
 		for(unsigned int j = 0; j < noLoci; j++)
 			varAlleleFreqs[i][j] = new double[MAXALLELE];
 	}
-	
+
 	for(unsigned int l = 0; l < noPopln; l++)
 		for(unsigned int i = 0; i < noLoci; i++)
 			for(unsigned int j = 0; j < noAlleles[i]; j++)
 				varAlleleFreqs[l][i][j]=0.0;
-	
+
 	double **migrationRates;
 	migrationRates = new double*[noPopln];
 	for(unsigned int i = 0; i < noPopln; i++)
 		migrationRates[i] = new double[noPopln+1];
-	
+
 	double **avgMigrationRates;
 	avgMigrationRates = new double*[noPopln];
 	for(unsigned int i = 0; i < noPopln; i++)
 		avgMigrationRates[i] = new double[noPopln+1];
-	
+
 	for(unsigned int i = 0; i < noPopln; i++)
 		for (unsigned int j = 0; j < noPopln; j++)
-			avgMigrationRates[i][j]=0.0;		
+			avgMigrationRates[i][j]=0.0;
 
 	double **varMigrationRates;
 	varMigrationRates = new double*[noPopln];
 	for(unsigned int i = 0; i < noPopln; i++)
 		varMigrationRates[i] = new double[noPopln+1];
-	
+
 	for(unsigned int i = 0; i < noPopln; i++)
 		for (unsigned int j = 0; j < noPopln; j++)
-			varMigrationRates[i][j]=0.0;		
-	
+			varMigrationRates[i][j]=0.0;
+
 	long int ***migrantCounts;
 	migrantCounts = new long int**[noPopln];
 	for(unsigned int i = 0; i < noPopln; i++)
@@ -382,13 +395,13 @@ int main( int argc, char *argv[] )
 		for(unsigned int j = 0; j < noPopln; j++)
 			migrantCounts[i][j] = new long int[3];
 	}
-	
+
 	for(unsigned int i = 0; i < noPopln; i++)
 		for(unsigned int j = 0; j < noPopln; j++)
 			for(int k = 0; k < 3; k++)
 				migrantCounts[i][j][k]=0;
-	
-	
+
+
 	double *FStat = new double[noPopln];
 	double *avgFStat = new double[noPopln];
 	double *varFStat = new double[noPopln];
@@ -398,7 +411,7 @@ int main( int argc, char *argv[] )
 		avgFStat[i]=0.0;
 		varFStat[i]=0.0;
 	}
-	
+
 	for(unsigned int l=0; l<noPopln; l++)
 	{
 		for(unsigned int k=0; k<=noPopln; k++)
@@ -407,9 +420,9 @@ int main( int argc, char *argv[] )
 		migrationRates[l][l] = 1.0-(1.0/3.0)*((noPopln-1.0)/noPopln);
 		migrationRates[l][noPopln] = (1.0/3.0)*((noPopln-1.0)/noPopln);
 	}
-	
+
 	getEmpiricalAlleleFreqs(alleleFreqs,sampleIndiv,noAlleles,noPopln,noLoci,noIndiv);
-	
+
 	/* uncomment for uniform distn of identical freqs in all populations */
     /*	for(int i=0; i < noPopln; i++)
 		for(int j=0; j < noLoci; j++)
@@ -430,14 +443,14 @@ int main( int argc, char *argv[] )
 				cout << "\n";
 			}
 	}
-	
+
 	for(unsigned int l = 0; l < noIndiv; l++)
 	{	sampleIndiv[l].migrantAge=0; sampleIndiv[l].migrantPopln=sampleIndiv[l].samplePopln; }
 	fillMigrantCounts(sampleIndiv,migrantCounts,noIndiv,noPopln);
-	
+
 	for(unsigned int i = 0; i < noIndiv; i++)
 		sampleIndiv[i].logL = logLik(sampleIndiv[i],alleleFreqs,FStat,noLoci);
-	
+
 	if(gArgs.debug)
 	{
 		std::cout << "mCLp: " << migCountLogProb(migrantCounts,migrationRates,noPopln) << "\n";
@@ -449,12 +462,12 @@ int main( int argc, char *argv[] )
 					std::cout << (int) migrantCounts[i][j][k] << "\n";
 				}
 	}
-	
-	
-	
+
+
+
 	/* Metropolis-Hastings algorithm */
 	/* Loop for mciter */
-	
+
 	/* debugging variables */
 
 	unsigned long int iter=0;
@@ -463,13 +476,13 @@ int main( int argc, char *argv[] )
 	double allelefreqAcceptRate=0.0;
 	double FStatAcceptRate=0.0;
 	double GenotypeAcceptRate=0.0;
-	
+
 	gsl_permutation_init (p);
-	
+
 	for(unsigned int i = 1; i <= mciter; i++)
-		
+
 	{
-			
+
 		indiv tempIndiv;
 		long int chosenIndiv;
 		unsigned int migrantPopln, migrantAge, samplePopln;
@@ -485,15 +498,15 @@ if(!NOANCMCMC)
 {
 
 		/* propose modified migrant ancestry for a random individual */
-			
-		
+
+
 		samplePopln = gsl_rng_uniform_int(r, noPopln);
-		
+
 		proposeMigrantAncDrop(migrantPopln, migrantAge, samplePopln, noPopln, migrantCounts);
 		gsl_ran_shuffle (r, p->data, N, sizeof(size_t));
 		bool foundIndiv=false;
 		int k=0;
-		while (!foundIndiv) 
+		while (!foundIndiv)
 		{
 			if((sampleIndiv[gsl_permutation_get(p,k)].migrantPopln == migrantPopln)&&
 			   (sampleIndiv[gsl_permutation_get(p,k)].migrantAge == migrantAge)&&
@@ -501,8 +514,8 @@ if(!NOANCMCMC)
 			{ chosenIndiv=gsl_permutation_get(p,k); foundIndiv = true; }
 			else { k++; }
 		}
-		proposeMigrantAncAdd(migrantPopAdd, migrantAgeAdd,migrantPopln, migrantAge, samplePopln, noPopln); 
-		 
+		proposeMigrantAncAdd(migrantPopAdd, migrantAgeAdd,migrantPopln, migrantAge, samplePopln, noPopln);
+
 		tempIndiv.samplePopln = sampleIndiv[chosenIndiv].samplePopln;
 		tempIndiv.migrantPopln = migrantPopAdd;
 		tempIndiv.migrantAge = migrantAgeAdd;
@@ -518,7 +531,7 @@ if(!NOANCMCMC)
 			logLprop = logLik(tempIndiv,alleleFreqs,FStat,noLoci);
 			dtLogL = logLprop - sampleIndiv[chosenIndiv].logL;
 		}
-			
+
 		// calculate change of logPr for migrant counts with new migrant ancestry
 		double dtLogPrCount=0.0;
 
@@ -532,18 +545,18 @@ if(!NOANCMCMC)
 
 		}
 		else
-		if (tempIndiv.migrantAge == 1) 
+		if (tempIndiv.migrantAge == 1)
 		{
 			dtLogPrCount += (log(migrationRates[tempIndiv.samplePopln][tempIndiv.migrantPopln])-
 			log(migrantCounts[tempIndiv.samplePopln][tempIndiv.migrantPopln][1]+1.0));
 
-		}			
-		else	
+		}
+		else
 		if(tempIndiv.migrantAge == 2)
 		{
 			dtLogPrCount += (log(2.0*migrationRates[tempIndiv.samplePopln][tempIndiv.migrantPopln])-
 			log(migrantCounts[tempIndiv.samplePopln][tempIndiv.migrantPopln][2]+1.0));
-		}	
+		}
 
 		if(sampleIndiv[chosenIndiv].migrantAge == 0)
 		{
@@ -551,12 +564,12 @@ if(!NOANCMCMC)
 			log(migrantCounts[sampleIndiv[chosenIndiv].samplePopln][sampleIndiv[chosenIndiv].migrantPopln][0]));
 		}
 		else
-			if (sampleIndiv[chosenIndiv].migrantAge == 1) 
+			if (sampleIndiv[chosenIndiv].migrantAge == 1)
 			{
 				dtLogPrCount -= (log(migrationRates[sampleIndiv[chosenIndiv].samplePopln][sampleIndiv[chosenIndiv].migrantPopln]) -
-				log(migrantCounts[sampleIndiv[chosenIndiv].samplePopln][sampleIndiv[chosenIndiv].migrantPopln][1])); 
-			}			
-			else	
+				log(migrantCounts[sampleIndiv[chosenIndiv].samplePopln][sampleIndiv[chosenIndiv].migrantPopln][1]));
+			}
+			else
 				if(sampleIndiv[chosenIndiv].migrantAge == 2)
 				{
 					dtLogPrCount -= (log(2.0*migrationRates[sampleIndiv[chosenIndiv].samplePopln][sampleIndiv[chosenIndiv].migrantPopln]) -
@@ -584,34 +597,34 @@ if(!NOANCMCMC)
 if(!NOMIGRATEMCMC)
 {
 
-	
+
 	/* propose a change to migration matrix */
-	 
+
 	double propMigrationRates[MAXPOPLN];
 	unsigned int sourcePopln;
 	sourcePopln = gsl_rng_uniform_int(r,noPopln);
 	migrantPopln = gsl_rng_uniform_int(r,noPopln-1);
 	if(migrantPopln >= sourcePopln) migrantPopln += 1;
-	for (unsigned int j=0; j < noPopln; j++) 
+	for (unsigned int j=0; j < noPopln; j++)
 	{
 		if(j != migrantPopln)
 			propMigrationRates[j] = migrationRates[sourcePopln][j];
-		else 
+		else
 		{
 			propMigrationRates[j] = gArgs.deltaM*(gsl_rng_uniform(r)-0.5) + migrationRates[sourcePopln][j];
-			while ((propMigrationRates[j]<0)||(propMigrationRates[j]>(1.0/3.0-migrationRates[sourcePopln][noPopln]+migrationRates[sourcePopln][j]))) 
+			while ((propMigrationRates[j]<0)||(propMigrationRates[j]>(1.0/3.0-migrationRates[sourcePopln][noPopln]+migrationRates[sourcePopln][j])))
 			{
 				if (propMigrationRates[j]<0) {
 					propMigrationRates[j]=abs(propMigrationRates[j]);
 				}
 				if (propMigrationRates[j]>(1.0/3.0-migrationRates[sourcePopln][noPopln]+migrationRates[sourcePopln][j]))
-					propMigrationRates[j]=1.0/3.0-migrationRates[sourcePopln][noPopln]+migrationRates[sourcePopln][j]-propMigrationRates[j]; 
+					propMigrationRates[j]=2.0*(1.0/3.0-migrationRates[sourcePopln][noPopln]+migrationRates[sourcePopln][j])-propMigrationRates[j];
 			}
 		}
-	}	
+	}
 	propMigrationRates[noPopln] = migrationRates[sourcePopln][noPopln] - migrationRates[sourcePopln][migrantPopln] + propMigrationRates[migrantPopln];
 		propMigrationRates[sourcePopln] = 1.0 - propMigrationRates[noPopln];
-	double logPrCurr=0.0, logPrProp=0.0;	
+	double logPrCurr=0.0, logPrProp=0.0;
 	for(unsigned int l = 0; l < noPopln; l++)
 		if(sourcePopln != l)
 			{
@@ -629,12 +642,12 @@ if(!NOMIGRATEMCMC)
 
 	// Acceptance-rejection step
 	alpha = gsl_rng_uniform(r);
-	
+
 	// debugging
 	// alpha = 0;
-	
-	
-	logPrMHR = logPrProp - logPrCurr;	
+
+
+	logPrMHR = logPrProp - logPrCurr;
 	if(alpha <= exp(logPrMHR))
 	{
 		for (unsigned int k=0; k<=noPopln; k++)
@@ -642,39 +655,39 @@ if(!NOMIGRATEMCMC)
 		migrationAcceptRate = (1.0/i)+((i-1.0)/i)*migrationAcceptRate;
 	}
 	else migrationAcceptRate = ((i-1.0)/i)*migrationAcceptRate;
-	
+
 }
 
-if(!NOALLELEMCMC)		
+if(!NOALLELEMCMC)
 {
-		
+
 	/* propose a change to a population allele frequency */
 
 	double propAlleleFreq[MAXALLELE];
 	double origAlleleFreq[MAXALLELE];
-	unsigned int chosenPopln = gsl_rng_uniform_int(r,noPopln);	
+	unsigned int chosenPopln = gsl_rng_uniform_int(r,noPopln);
 	unsigned int chosenLocus = gsl_rng_uniform_int(r,noLoci);
 	unsigned int chosenAllele = gsl_rng_uniform_int(r,noAlleles[chosenLocus]);
 	double logLOrig[MAXINDIV], logLProposed[MAXINDIV];
 	if (!NOLIKELIHOOD)
 	{
-		for (unsigned int l=0; l<noIndiv; l++) 
+		for (unsigned int l=0; l<noIndiv; l++)
 			logLOrig[l] = oneLocusLogLik(sampleIndiv[l],alleleFreqs,FStat,chosenLocus);
 	}
-	
+
 	propAlleleFreq[chosenAllele] = 	abs(alleleFreqs[chosenPopln][chosenLocus][chosenAllele]+(gsl_rng_uniform(r)-0.5)*gArgs.deltaA);
-	
+
 	// added July 20, 2011 (further modified Nov 7, 2011)
 	if (propAlleleFreq[chosenAllele] > 1.0) {
 		propAlleleFreq[chosenAllele] = abs(1.0 - propAlleleFreq[chosenAllele]);
 	}
-	
+
 	for (unsigned int l=0; l<noAlleles[chosenLocus]; l++)
 		if(l!=chosenAllele)
 		{
 				propAlleleFreq[l] = exp(log(alleleFreqs[chosenPopln][chosenLocus][l])+
 				  log(1.0-propAlleleFreq[chosenAllele])-log(1.0-alleleFreqs[chosenPopln][chosenLocus][chosenAllele]));
-		}		
+		}
 
 	// check that allele freqs sum to one and correct if needed.
 	double sum=0.0;
@@ -690,7 +703,7 @@ if(!NOALLELEMCMC)
 	       	sum2+=propAlleleFreq[l];
 			propAlleleFreq[noAlleles[chosenLocus]] = 1.0 - sum2; */
 	}
-	
+
 	for (unsigned int l=0; l<noAlleles[chosenLocus]; l++)
 	{
 		origAlleleFreq[l] = alleleFreqs[chosenPopln][chosenLocus][l];
@@ -698,10 +711,10 @@ if(!NOALLELEMCMC)
 	}
 	if (!NOLIKELIHOOD)
 	{
-		for (unsigned int l=0; l<noIndiv; l++) 
+		for (unsigned int l=0; l<noIndiv; l++)
 			logLProposed[l] = oneLocusLogLik(sampleIndiv[l],alleleFreqs,FStat,chosenLocus);
 		logLprop=0; dtLogL=0;
-		for (unsigned int l=0; l<noIndiv; l++) 
+		for (unsigned int l=0; l<noIndiv; l++)
 		{
 			dtLogL +=  (logLProposed[l] - logLOrig[l]);
 		}
@@ -710,9 +723,9 @@ if(!NOALLELEMCMC)
 	alpha = gsl_rng_uniform(r);
 	if (!NOLIKELIHOOD)
 	{
-		logPrMHR = dtLogL;	
+		logPrMHR = dtLogL;
 	}
-	else 
+	else
 	{
 		logPrMHR = 1;
 	}
@@ -726,7 +739,7 @@ if(!NOALLELEMCMC)
 		}
 		allelefreqAcceptRate = (1.0/i)+((i-1.0)/i)*allelefreqAcceptRate;
 	}
-	else	
+	else
 	{
 		for (unsigned int k=0; k<noAlleles[chosenLocus]; k++)
 			alleleFreqs[chosenPopln][chosenLocus][k] = origAlleleFreq[k];
@@ -736,20 +749,20 @@ if(!NOALLELEMCMC)
 }
 
 if(!NOFSTATMCMC)
-{		
+{
 	/* propose a change to a population inbreeding coefficient */
-	
+
 	double origLik=0.0,propLik=0.0;
 	double logLVec[MAXINDIV];
 	double propFStat[MAXPOPLN];
-	for (unsigned int l=0; l<noPopln; l++) 
+	for (unsigned int l=0; l<noPopln; l++)
 		propFStat[l]=FStat[l];
 	unsigned int chosenPopln = gsl_rng_uniform_int(r,noPopln);
 	double prop=abs(FStat[chosenPopln]+(gsl_rng_uniform(r)-0.5)*gArgs.deltaF);
 	if (prop<=1)
 		propFStat[chosenPopln] = prop;
-	else 
-		propFStat[chosenPopln] = prop - 1.0;
+	else
+		propFStat[chosenPopln] = 2.0-prop;
 	if (!NOLIKELIHOOD)
 	{
 		for(unsigned int l=0; l<noIndiv; l++)
@@ -759,14 +772,14 @@ if(!NOFSTATMCMC)
 			{
 				logLVec[l]=logLik(sampleIndiv[l],alleleFreqs,propFStat,noLoci);
 			}
-			else 
+			else
 			{
 				logLVec[l]=sampleIndiv[l].logL;
 			}
 			propLik+=logLVec[l];
 		}
-	}	
-	
+	}
+
 		// Acceptance-rejection step
 	alpha = gsl_rng_uniform(r);
 	if (!NOLIKELIHOOD)
@@ -790,7 +803,7 @@ if(!NOFSTATMCMC)
 		FStatAcceptRate = (1.0/i)+((i-1.0)/i)*FStatAcceptRate;
 	}
 	else
-	FStatAcceptRate = ((i-1.0)/i)*FStatAcceptRate;		
+	FStatAcceptRate = ((i-1.0)/i)*FStatAcceptRate;
 }
 
 if(!NOMISSINGDATA)
@@ -798,7 +811,7 @@ if(!NOMISSINGDATA)
 	/* propose a change to a missing genotype */
 	if(noMissingGenotypes>0)
 	{
-		double propLogL=0.0, origLogL=0.0;		
+		double propLogL=0.0, origLogL=0.0;
 		int chooseIndiv = missingData[gsl_rng_uniform_int(r, missingData.size())];
 		int chosenLocus = sampleIndiv[chooseIndiv].missingGenotypes[gsl_rng_uniform_int(r, sampleIndiv[chooseIndiv].missingGenotypes.size())];
 		origLogL=oneLocusLogLik(sampleIndiv[chooseIndiv],alleleFreqs,FStat,chosenLocus);
@@ -807,14 +820,14 @@ if(!NOMISSINGDATA)
 		sampleIndiv[chooseIndiv].genotype[chosenLocus][0] = gsl_rng_uniform_int(r, noAlleles[chosenLocus]);
 		sampleIndiv[chooseIndiv].genotype[chosenLocus][1] = gsl_rng_uniform_int(r, noAlleles[chosenLocus]);
 		propLogL=oneLocusLogLik(sampleIndiv[chooseIndiv],alleleFreqs,FStat,chosenLocus);
-		
+
 		// Acceptance-rejection step
 		alpha = gsl_rng_uniform(r);
 		if (!NOLIKELIHOOD)
 		{
 			logPrMHR = propLogL - origLogL;
 		}
-		else 
+		else
 		{
 			logPrMHR = 1;
 		}
@@ -828,37 +841,37 @@ if(!NOMISSINGDATA)
 		{
 			sampleIndiv[chooseIndiv].genotype[chosenLocus][0] = origAllele1;
 			sampleIndiv[chooseIndiv].genotype[chosenLocus][1] = origAllele2;
-			GenotypeAcceptRate = ((i-1.0)/i)*GenotypeAcceptRate;					
+			GenotypeAcceptRate = ((i-1.0)/i)*GenotypeAcceptRate;
 		}
 	}
-}		
-		
-	// Print logL to trace file	
+}
+
+	// Print logL to trace file
 		if (i==1) {
-			tracefile << "State\t" << "LogProb\t"; 
+			tracefile << "State\t" << "LogProb\t";
 		}
-		if(gArgs.trace && ((i % gArgs.sampling)==0)) 
-		{ 
+		if(gArgs.trace && ((i % gArgs.sampling)==0))
+		{
 			double logLG=0.0, logLM=0.0;
 			for (unsigned int m=0; m < noIndiv; m++) { logLG += sampleIndiv[m].logL; }
 			logLM = migCountLogProb(migrantCounts,migrationRates,noPopln);
 			tracefile << i << "\t" << logLM + logLG << "\t";
 		}
-		
-		
-		
+
+
+
 	// Summarize mcmc samples and print likelihoods to screen
 
 		if(gArgs.verbose)
 		{
-			if((i % 10000)==0) 
-			{ 
+			if((i % 10000)==0)
+			{
 				double logLG=0.0, logLM=0.0;
 				if (!NOLIKELIHOOD)
 				{
 					for(unsigned int m=0; m < noIndiv; m++) { logLG += sampleIndiv[m].logL; }
 				}
-				else 
+				else
 				{
 					logLG=0;
 				}
@@ -866,7 +879,7 @@ if(!NOMISSINGDATA)
 				logLM = migCountLogProb(migrantCounts,migrationRates,noPopln);
 				std::cout.setf(std::ios::fixed, std::ios::floatfield);
 				std::cout << std::setprecision(2) << "logP(M): " << logLM << " logL(G): ";
-				std::cout << logLG << " logL: " << logLM + logLG << " \% done: " << std::flush; 
+				std::cout << logLG << " logL: " << logLM + logLG << " \% done: " << std::flush;
 				if(i < gArgs.burnin)
 					std::cout << "[" << i/(mciter*1.0) << "]" << std::flush;
 				else
@@ -874,14 +887,14 @@ if(!NOMISSINGDATA)
 				std::cout << " \% accepted: (" << migrationAcceptRate << ", " << ancestryAcceptRate << ", " << allelefreqAcceptRate << ", ";
 				std::cout << FStatAcceptRate << ", " << GenotypeAcceptRate << ")" << "\r" << std::flush;
 			}
-			if((i % (mciter/10))==0) 
-			{ 
+			if((i % (mciter/10))==0)
+			{
 				double logLG=0.0, logLM=0.0;
 				if (!NOLIKELIHOOD)
 				{
 					for(unsigned int m=0; m < noIndiv; m++) { logLG += sampleIndiv[m].logL; }
 				}
-				else 
+				else
 				{
 					logLG=0;
 				}
@@ -897,7 +910,7 @@ if(!NOMISSINGDATA)
 				std::cout << " \% accepted: (" << migrationAcceptRate << ", " << ancestryAcceptRate << ", " << allelefreqAcceptRate << ", ";
 				std::cout << FStatAcceptRate <<  ", " << GenotypeAcceptRate << ")" << "\n" << std::flush;
 			}
-			
+
 		}
 		else
 		{
@@ -914,31 +927,31 @@ if(!NOMISSINGDATA)
 				}
 			}
 		}
-		
-		// Print migration rates to trace file	
-		if ((i==1) && gArgs.trace) 
+
+		// Print migration rates to trace file
+		if ((i==1) && gArgs.trace)
 		{
 			for (unsigned int l = 0; l < noPopln; l++)
 				for (unsigned int k = 0; k < noPopln; k++)
-					tracefile << "m[" << l << "][" << k << "]\t"; 
-			tracefile << "\n"; 
+					tracefile << "m[" << l << "][" << k << "]\t";
+			tracefile << "\n";
 		}
-		if(gArgs.trace && ((i % gArgs.sampling)==0)) 
-		{ 
+		if(gArgs.trace && ((i % gArgs.sampling)==0))
+		{
 			for (unsigned int l = 0; l < noPopln; l++)
 				for (unsigned int k = 0; k < noPopln; k++)
-					tracefile << migrationRates[l][k] << "\t" ; 
-			tracefile << "\n"; 
+					tracefile << migrationRates[l][k] << "\t" ;
+			tracefile << "\n";
 		}
-		
-		
-		
-		
-		
+
+
+
+
+
 		if(((i % gArgs.sampling)==0)&&(i > gArgs.burnin))
 		{
 			double sqrDiffMean=0.0;
-			
+
 			for (unsigned int l = 0; l < noPopln; l++)
 				for (unsigned int k = 0; k < noPopln; k++)
 				{
@@ -949,7 +962,7 @@ if(!NOMISSINGDATA)
 					}
 						avgMigrationRates[l][k] = avgMigrationRates[l][k]+(migrationRates[l][k]-avgMigrationRates[l][k])/(1.0+iter);
 				}
-			
+
 			for (unsigned int l = 0; l < noPopln; l++)
 				for (unsigned int k = 0; k < noLoci; k++)
 					for(unsigned int m = 0; m < noAlleles[k]; m++)
@@ -958,68 +971,68 @@ if(!NOMISSINGDATA)
 						{
 							sqrDiffMean=(alleleFreqs[l][k][m]-avgAlleleFreqs[l][k][m])*(alleleFreqs[l][k][m]-avgAlleleFreqs[l][k][m])/(iter+1.0);
 							varAlleleFreqs[l][k][m] = ((iter-1.0)/iter)*varAlleleFreqs[l][k][m]+sqrDiffMean;
-						}						
+						}
 						avgAlleleFreqs[l][k][m] = avgAlleleFreqs[l][k][m]+(alleleFreqs[l][k][m]-avgAlleleFreqs[l][k][m])/(1.0+iter);
 					}
-			
-			for (unsigned int l=0; l < noPopln; l++) 
+
+			for (unsigned int l=0; l < noPopln; l++)
 			{
 				if(iter > 1)
 				{
 					sqrDiffMean=(FStat[l]-avgFStat[l])*(FStat[l]-avgFStat[l])/(iter+1.0);
 					varFStat[l] = ((iter-1.0)/iter)*varFStat[l]+sqrDiffMean;
-				}						
+				}
 				avgFStat[l] = avgFStat[l]+(FStat[l]-avgFStat[l])/(1.0+iter);
 			}
-			
-			for (unsigned int l=0; l < noIndiv; l++) 
+
+			for (unsigned int l=0; l < noIndiv; l++)
 			{
-				if (sampleIndiv[l].migrantAge == 0) 
+				if (sampleIndiv[l].migrantAge == 0)
 				{
 					ancP[l][sampleIndiv[l].samplePopln][0]=
 					ancP[l][sampleIndiv[l].samplePopln][0]*(iter/(iter+1.0))+(1.0/(iter+1.0));
 					for(unsigned int k=0; k<noPopln; k++)
 						for(int b=0; b<3; b++)
-							if (!((k==sampleIndiv[l].samplePopln)&&(b==0))) 
+							if (!((k==sampleIndiv[l].samplePopln)&&(b==0)))
 							{
 								ancP[l][k][b]=ancP[l][k][b]*(iter/(iter+1.0));
-							}						
+							}
 				}
 				else
-					if (sampleIndiv[l].migrantAge == 1) 
+					if (sampleIndiv[l].migrantAge == 1)
 					{
 						ancP[l][sampleIndiv[l].migrantPopln][1]=
 						ancP[l][sampleIndiv[l].migrantPopln][1]*(iter/(iter+1.0))+(1.0/(iter+1.0));
 						for(unsigned int k=0; k<noPopln; k++)
 							for(unsigned int b=0; b<3; b++)
-								if (!((k==sampleIndiv[l].migrantPopln)&&(b==1))) 
+								if (!((k==sampleIndiv[l].migrantPopln)&&(b==1)))
 								{
 									ancP[l][k][b]=ancP[l][k][b]*(iter/(iter+1.0));
-								}						
+								}
 					}
-					else 
-						if(sampleIndiv[l].migrantAge == 2) 
+					else
+						if(sampleIndiv[l].migrantAge == 2)
 						{
 							ancP[l][sampleIndiv[l].migrantPopln][2]=
 							ancP[l][sampleIndiv[l].migrantPopln][2]*(iter/(iter+1.0))+(1.0/(iter+1.0));
 							for(unsigned int k=0; k<noPopln; k++)
 								for(unsigned int b=0; b<3; b++)
-									if (!((k==sampleIndiv[l].migrantPopln)&&(b==2))) 
+									if (!((k==sampleIndiv[l].migrantPopln)&&(b==2)))
 									{
 										ancP[l][k][b]=ancP[l][k][b]*(iter/(iter+1.0));
-									}						
+									}
 						}
 
 				}
-			
-			
+
+
 		iter+=1;
 		}
-}	
-	
+}
+
 	if (!gArgs.verbose)
 		cout << " | \n";
-	
+
 if(gArgs.debug)
 	{
 	for(unsigned int l = 0; l < noPopln; l++)
@@ -1029,30 +1042,30 @@ if(gArgs.debug)
 				std::cout << "\nmigrantCounts[" << l << "][" << j << "][" << k << "]:";
 				std::cout << migrantCounts[l][j][k];
 			}
-	for (unsigned int l = 0; l < noIndiv; l++) 
+	for (unsigned int l = 0; l < noIndiv; l++)
 	{
 		std::cout << "\nIndivID: " << l << " migrantPop: " << sampleIndiv[l].migrantPopln << " migrantAge: " << sampleIndiv[l].migrantAge;
 		std::cout << " samplePop: " << sampleIndiv[l].samplePopln;
-		for (unsigned int k=0; k < noLoci; k++) 
+		for (unsigned int k=0; k < noLoci; k++)
 		{
 			string locusName;
 			IndivMap::iterator iterLocus = locusIDMap.begin();
-			while (iterLocus != locusIDMap.end()) 
+			while (iterLocus != locusIDMap.end())
 			{
 				if(iterLocus->second == k)
 					locusName=iterLocus->first;
 				iterLocus++;
-			}									
+			}
 			cout << " locus: " << locusName << " " << sampleIndiv[l].genotype[k][0] << " " << sampleIndiv[l].genotype[k][1];
 		}
 	}
 	}
-	
+
 
 	/* print results to output file */
-	
+
 	mcmcout << "\nInput file: " << infileName << "\n";
-	if (gArgs.settings) 
+	if (gArgs.settings)
 	{
 		mcmcout << "Random seed=" << gArgs.seed << " MCMC iterations=" << gArgs.mciter << " Burn-in=" << gArgs.burnin << " Sampling interval=" << gArgs.sampling << "\n";
 		mcmcout << "Mixing parameters: (dM=" << gArgs.deltaM << ",dA=" << gArgs.deltaA << ",dF=" << gArgs.deltaF << ")" << " Output file=" << gArgs.outfileName << "\n";
@@ -1063,7 +1076,7 @@ for(unsigned int l=0; l<noLoci; l++)
   {
     string locusName;
     IndivMap::iterator iterLocus = locusIDMap.begin();
-    while (iterLocus != locusIDMap.end()) 
+    while (iterLocus != locusIDMap.end())
       {
 	if(iterLocus->second == l)
 	  locusName=iterLocus->first;
@@ -1076,11 +1089,11 @@ mcmcout << "\n\n";
 mcmcout << "\n Population Index -> Population Label:\n\n";
 
 	IndivMap::iterator iterPopln = poplnIDMap.begin();
-	while (iterPopln != poplnIDMap.end()) 
+	while (iterPopln != poplnIDMap.end())
 	{
 		mcmcout << " " << iterPopln->second << "->" << iterPopln->first;
 		iterPopln++;
-	}		
+	}
 	mcmcout << "\n\n Migration Rates:\n";
 	mcmcout.setf(std::ios::fixed, std::ios::floatfield);
 	for (unsigned int l = 0; l < noPopln; l++)
@@ -1092,28 +1105,28 @@ mcmcout << "\n Population Index -> Population Label:\n\n";
 		    mcmcout << std::setprecision(4) << sqrt(varMigrationRates[l][k]) << ")" << flush;
 		}
 	}
-	
+
 	mcmcout << "\n\n Inbreeding Coefficients:\n";
 	mcmcout.setf(std::ios::fixed, std::ios::floatfield);
 	for (unsigned int l = 0; l < noPopln; l++)
 	{
 		string poplnName;
 		IndivMap::iterator iterPopln = poplnIDMap.begin();
-		while (iterPopln != poplnIDMap.end()) 
+		while (iterPopln != poplnIDMap.end())
 		{
 			if(iterPopln->second == l)
 				poplnName = iterPopln->first;
 			iterPopln++;
-		}		
-		mcmcout << "\n " << poplnName << " Fstat: " << avgFStat[l] << "(" << sqrt(varFStat[l]) << ")";	
+		}
+		mcmcout << "\n " << poplnName << " Fstat: " << avgFStat[l] << "(" << sqrt(varFStat[l]) << ")";
 	}
-	
+
 	mcmcout << "\n\n Allele Frequencies:";
 	for (unsigned int l = 0; l < noPopln; l++)
 	{
 		string poplnName;
 		IndivMap::iterator iterPopln = poplnIDMap.begin();
-		while (iterPopln != poplnIDMap.end()) 
+		while (iterPopln != poplnIDMap.end())
 		{
 			if(iterPopln->second == l)
 				poplnName = iterPopln->first;
@@ -1124,57 +1137,57 @@ mcmcout << "\n Population Index -> Population Label:\n\n";
 		{
 			string locusName;
 			IndivMap::iterator iterLocus = locusIDMap.begin();
-			while (iterLocus != locusIDMap.end()) 
+			while (iterLocus != locusIDMap.end())
 			{
 				if(iterLocus->second == k)
 					locusName=iterLocus->first;
 				iterLocus++;
-			}									
+			}
 			mcmcout << "\n " << locusName << ">>\n" << " ";
 			for (unsigned int j=0; j < noAlleles[k]; j++)
 			{
 				string alleleName;
 				IndivMap::iterator iterAllele = alleleIDMap[k].begin();
-				while (iterAllele != alleleIDMap[k].end()) 
+				while (iterAllele != alleleIDMap[k].end())
 				{
 					if(iterAllele->second == j)
 						alleleName=iterAllele->first;
 					iterAllele++;
-				}									
-				
+				}
+
 				mcmcout << std::setprecision(3) <<  alleleName << ":" << avgAlleleFreqs[l][k][j] << "(";
 				mcmcout << std::setprecision(3) << sqrt(varAlleleFreqs[l][k][j]) << ") " << flush;
 			}
 		}
 	}
-	
+
 	/* print out individual genotypes and migrant ancestries to BA3indiv.txt */
-	
-	if (gArgs.genotypes) 
+
+	if (gArgs.genotypes)
 	{
 	indivout.setf(std::ios::fixed, std::ios::floatfield);
-	for (unsigned int l=0; l<noIndiv; l++) 
+	for (unsigned int l=0; l<noIndiv; l++)
 	{
 		string indivName;
 		IndivMap::iterator iterIndiv = indivIDMap.begin();
-		while (iterIndiv != indivIDMap.end()) 
+		while (iterIndiv != indivIDMap.end())
 		{
 			if(iterIndiv->second == l)
 				indivName = iterIndiv->first;
 			iterIndiv++;
 		}
 		indivout << "\n\n Individual: " << indivName << " Source Popln: " << sampleIndiv[l].samplePopln << "\n" << " Genotypes>>";
-		for (unsigned int j=0; j<noLoci; j++) 
+		for (unsigned int j=0; j<noLoci; j++)
 		{
 			if((j % 10)==0) indivout << "\n";
 			string locusName;
 			IndivMap::iterator iterLocus = locusIDMap.begin();
-			while (iterLocus != locusIDMap.end()) 
+			while (iterLocus != locusIDMap.end())
 			{
 				if(iterLocus->second == j)
 					locusName=iterLocus->first;
 				iterLocus++;
-			}									
+			}
 			indivout << " " << locusName << ":";
 			for (unsigned int m=0; m <= 1; m++)
 			{
@@ -1188,11 +1201,11 @@ mcmcout << "\n Population Index -> Population Label:\n\n";
 					if(m==0)
 						indivout << "?/?";
 				}
-				else 
+				else
 				{
 					string alleleName;
 					IndivMap::iterator iterAllele = alleleIDMap[j].begin();
-					while (iterAllele != alleleIDMap[j].end()) 
+					while (iterAllele != alleleIDMap[j].end())
 					{
 						if(iterAllele->second == sampleIndiv[l].genotype[j][m])
                         {
@@ -1211,15 +1224,15 @@ mcmcout << "\n Population Index -> Population Label:\n\n";
 			for(unsigned int k=0; k<noPopln; k++)
 				indivout << std::setprecision(3) << " [" << k << "," << j << "]:" << ancP[l][k][j];
 		}
-	
-	
-	}	
-		
-	/* more to go here */
-		
+
+
 	}
-	
-	
+
+	/* more to go here */
+
+	}
+
+
 	std::cout << "\n\n" << " MCMC run completed. Output written to " << gArgs.outfileName << "\n\n";
 	delete []sampleIndiv;
 	sampleIndiv=NULL;
@@ -1230,9 +1243,10 @@ mcmcout << "\n Population Index -> Population Label:\n\n";
 void printBanner(void)
 {
 	std::cout << "\n\n";
-	std::cout << "                    BayesAss Edition 3.0 (BA3)                    \n";
-	std::cout << "                          Bruce Rannala                           \n";
-	std::cout << "          Department of Evolution and Ecology at UC Davis         \n";
+	std::cout << "                    BayesAss Edition 3.0.4 (BA3)                    \n";
+	std::cout << "                        Released: 09/28/2015                        \n";
+	std::cout << "                            Bruce Rannala                           \n";
+	std::cout << "           Department of Evolution and Ecology at UC Davis          \n";
 	std::cout << "\n\n";
 }
 
@@ -1253,7 +1267,7 @@ void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLo
 	unsigned int indivIter=0, popIter=0, locIter=0, alleleIter[MAXLOCI];
 	unsigned int currIndivID, currPoplnID, currLocusID, currAllele1, currAllele2;
     std::string inputLine=" ";
-	
+
 	for(int k = 0; k < MAXINDIV-1; k++)
 	  for(int l = 1; l < MAXLOCI-1; l++)
 	    {
@@ -1265,7 +1279,7 @@ void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLo
 		alleleIter[l] = 0;
 
 	while(std::getline(mcmcin,inputLine))
-	{		
+	{
 
 	int numspaces=0;
 	char lastChar='a', nextChar;
@@ -1276,12 +1290,12 @@ void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLo
 	{
 	  if(!firstChar)
 	    {
-	      if(!isspace(inputLine.at(ii))) 
+	      if(!isspace(inputLine.at(ii)))
 		firstChar=true;
 	    }
 	  else
 	    {
-	      nextChar = inputLine.at(ii); // gets a character	      
+	      nextChar = inputLine.at(ii); // gets a character
 	      if ((isspace(inputLine[ii]))&&!(isspace(inputLine[ii-1])))
 		numspaces++;
 	    }
@@ -1290,8 +1304,8 @@ void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLo
 	  {
 	    cerr << "Error: Incorrect number of entries in line>> " << inputLine << " >>of input file " << infileName << "\n\n"; exit(1);
 	  }
-	
-		if (inputLine.size()>1) 
+
+		if (inputLine.size()>1)
 		{
         std::istringstream ss(inputLine);
 		ss >> aline.indiv;
@@ -1299,7 +1313,7 @@ void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLo
 		ss >> aline.locus;
 		ss >> aline.allele1;
 		ss >> aline.allele2;
-		if (!ss) 
+		if (!ss)
 		{
 			cerr << "input file error: " << inputLine;
 			exit(1);
@@ -1327,7 +1341,7 @@ void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLo
 				iterAllele = alleleIDMap[currLocusID].find(aline.allele2);
 				if (iterAllele != alleleIDMap[currLocusID].end())
 					currAllele2 = iterAllele->second;
-				else	
+				else
 				{
 					alleleIDMap[currLocusID].insert(std::pair<string, unsigned int>(aline.allele2, alleleIter[currLocusID]));
 					currAllele2 = alleleIter[currLocusID];
@@ -1341,7 +1355,7 @@ void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLo
 			popIter++;
 			locIter++;
 		}
-		else 
+		else
 		{
 			IndivMap::iterator iterIndiv = indivIDMap.begin();
 			iterIndiv = indivIDMap.find(aline.indiv);
@@ -1350,7 +1364,7 @@ void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLo
 				currIndivID = iterIndiv->second;
 				IndivMap::iterator iterLocus = locusIDMap.begin();
 				iterLocus = locusIDMap.find(aline.locus);
-				if (iterLocus != locusIDMap.end() ) 
+				if (iterLocus != locusIDMap.end() )
 					currLocusID = iterLocus->second;
 				else
 				{
@@ -1364,7 +1378,7 @@ void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLo
 					iterAllele = alleleIDMap[currLocusID].find(aline.allele1);
 					if (iterAllele != alleleIDMap[currLocusID].end())
 						currAllele1 = iterAllele->second;
-					else	
+					else
 					{
 						alleleIDMap[currLocusID].insert(std::pair<string, unsigned int>(aline.allele1, alleleIter[currLocusID]));
 						currAllele1 = alleleIter[currLocusID];
@@ -1378,7 +1392,7 @@ void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLo
 					iterAllele = alleleIDMap[currLocusID].find(aline.allele2);
 					if (iterAllele != alleleIDMap[currLocusID].end())
 						currAllele2 = iterAllele->second;
-					else	
+					else
 					{
 						alleleIDMap[currLocusID].insert(std::pair<string, unsigned int>(aline.allele2, alleleIter[currLocusID]));
 						currAllele2 = alleleIter[currLocusID];
@@ -1386,7 +1400,7 @@ void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLo
 					}
 				}
 				else currAllele2 = -1;
-			}	
+			}
 			else
 			{
 				indivIDMap.insert(std::pair<string, unsigned int>(aline.indiv,indivIter));
@@ -1395,7 +1409,7 @@ void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLo
 				indivIter++;
 				IndivMap::iterator iterPopln = poplnIDMap.begin();
 				iterPopln = poplnIDMap.find(aline.samplePop);
-				if (iterPopln != poplnIDMap.end() ) 
+				if (iterPopln != poplnIDMap.end() )
 					currPoplnID = iterPopln->second;
 				else
 				{
@@ -1406,7 +1420,7 @@ void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLo
 				}
 				IndivMap::iterator iterLocus = locusIDMap.begin();
 				iterLocus = locusIDMap.find(aline.locus);
-				if (iterLocus != locusIDMap.end() ) 
+				if (iterLocus != locusIDMap.end() )
 					currLocusID = iterLocus->second;
 				else
 				{
@@ -1420,7 +1434,7 @@ void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLo
 					iterAllele = alleleIDMap[currLocusID].find(aline.allele1);
 					if (iterAllele != alleleIDMap[currLocusID].end())
 						currAllele1 = iterAllele->second;
-					else	
+					else
 					{
 						alleleIDMap[currLocusID].insert(std::pair<string, unsigned int>(aline.allele1, alleleIter[currLocusID]));
 						currAllele1 = alleleIter[currLocusID];
@@ -1434,7 +1448,7 @@ void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLo
 					iterAllele = alleleIDMap[currLocusID].find(aline.allele2);
 					if (iterAllele != alleleIDMap[currLocusID].end())
 						currAllele2 = iterAllele->second;
-					else	
+					else
 					{
 						alleleIDMap[currLocusID].insert(std::pair<string, unsigned int>(aline.allele2, alleleIter[currLocusID]));
 						currAllele2 = alleleIter[currLocusID];
@@ -1443,11 +1457,11 @@ void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLo
 				}
 				else currAllele2 = -1;
 			}
-			
+
 		}
 	}
 	sampleIndiv[currIndivID].genotype[currLocusID][0] = currAllele1;
-	sampleIndiv[currIndivID].genotype[currLocusID][1] = currAllele2;		
+	sampleIndiv[currIndivID].genotype[currLocusID][1] = currAllele2;
 	}
 	noIndiv = indivIter--;
 	noPopln = popIter--;
@@ -1458,10 +1472,10 @@ void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLo
 	for(unsigned int k = 0; k < noIndiv; k++)
 	  for(unsigned int l = 0; l < noLoci; l++)
 	    if((sampleIndiv[k].genotype[l][0]==-2)||(sampleIndiv[k].genotype[l][1]==-2))
-	      { 
+	      {
 		string locusName;
 		IndivMap::iterator iterLocus = locusIDMap.begin();
-		while (iterLocus != locusIDMap.end()) 
+		while (iterLocus != locusIDMap.end())
 		{
 			if(iterLocus->second == l)
 				locusName=iterLocus->first;
@@ -1469,14 +1483,14 @@ void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLo
 		}
 		string indivName;
 		IndivMap::iterator iterIndiv = indivIDMap.begin();
-		while (iterIndiv != indivIDMap.end()) 
+		while (iterIndiv != indivIDMap.end())
 		{
 			if(iterIndiv->second == k)
 				indivName=iterIndiv->first;
 			iterIndiv++;
 		}
 
-		cerr << "Missing genotype entry for individual: " << indivName << " at locus: " <<  locusName  << "!\n\n"; exit(1); 
+		cerr << "Missing genotype entry for individual: " << indivName << " at locus: " <<  locusName  << "!\n\n"; exit(1);
 
 	      }
 
@@ -1495,15 +1509,15 @@ void getEmpiricalAlleleFreqs(double ***alleleFreqs, indiv *sampleIndiv, unsigned
 		for(unsigned int j = 0; j < noLoci; j++)
 			poplnAlleleCounts[i][j] = new long int[noAlleles[j]];
 	}
-	
+
 	for (unsigned int l=0; l<noPopln; l++) { indivPerPopln[l] = 0; }
-	
+
 	for (unsigned int l=0; l<noPopln; l++)
-		for (unsigned int j=0; j<noLoci; j++) 
-			for (unsigned int k=0; k<noAlleles[j]; k++) 
+		for (unsigned int j=0; j<noLoci; j++)
+			for (unsigned int k=0; k<noAlleles[j]; k++)
 			{
 				int alleleCount=0;
-				for (unsigned int m=0; m<noIndiv; m++) 
+				for (unsigned int m=0; m<noIndiv; m++)
 				{
 					if(sampleIndiv[m].samplePopln == l)
 					{
@@ -1516,10 +1530,10 @@ void getEmpiricalAlleleFreqs(double ***alleleFreqs, indiv *sampleIndiv, unsigned
 				poplnAlleleCounts[l][j][k] = alleleCount;
 			}
 	for (unsigned int l=0; l<noPopln; l++)
-		for (unsigned int j=0; j<noLoci; j++) 
+		for (unsigned int j=0; j<noLoci; j++)
 			for (unsigned int k=0; k<noAlleles[j]; k++)
 				alleleFreqs[l][j][k] = (poplnAlleleCounts[l][j][k]/(2.0*indivPerPopln[l])+epsilon)/(1.0+noAlleles[j]*epsilon);
-	
+
 	if(gArgs.debug)
 	for (unsigned int l=0; l<noPopln; l++)
 		for (unsigned int j=0; j<noLoci; j++)
@@ -1529,7 +1543,7 @@ void getEmpiricalAlleleFreqs(double ***alleleFreqs, indiv *sampleIndiv, unsigned
 				sum+=alleleFreqs[l][j][k];
 			cout << "\nSum of initial allele freqs at pop:" << l << " locus:" << j << " = " << sum;
 		}
-	
+
 	delete []poplnAlleleCounts;
 	poplnAlleleCounts=NULL;
 }
@@ -1565,7 +1579,7 @@ double migCountLogProb(long int ***migrantCounts, double **migrationRates, unsig
 			}
 		logPr+=migrantCounts[l][l][0]*log(1.0-3*migrationRates[l][noPopln]) - gsl_sf_lnfact(migrantCounts[l][l][0]);
 	}
-	return(logPr);	
+	return(logPr);
 }
 
 
@@ -1596,10 +1610,10 @@ double logLik(indiv Indiv, double ***alleleFreqs, double *FStat, unsigned int no
 			else
 				logPr+=log(2.0*(1-FStat[Indiv.migrantPopln])*alleleFreqs[Indiv.migrantPopln][i][Indiv.genotype[i][0]]*
 						   alleleFreqs[Indiv.migrantPopln][i][Indiv.genotype[i][1]]);
-		}		
+		}
 	}
 	else
-	{	
+	{
 		for(unsigned int i = 0; i < noLoci; i++)
 		{
 			if(Indiv.genotype[i][0] == Indiv.genotype[i][1])
@@ -1609,7 +1623,7 @@ double logLik(indiv Indiv, double ***alleleFreqs, double *FStat, unsigned int no
 				alleleFreqs[Indiv.migrantPopln][i][Indiv.genotype[i][1]]*alleleFreqs[Indiv.samplePopln][i][Indiv.genotype[i][0]]);
 		}
 	}
-	return logPr;		
+	return logPr;
 }
 
 double oneLocusLogLik(indiv Indiv, double ***alleleFreqs, double *FStat, int chosenLocus)
@@ -1636,39 +1650,39 @@ double oneLocusLogLik(indiv Indiv, double ***alleleFreqs, double *FStat, int cho
 						   alleleFreqs[Indiv.migrantPopln][chosenLocus][Indiv.genotype[chosenLocus][1]]);
 	}
 	else
-	{	
+	{
 		if(Indiv.genotype[chosenLocus][0] == Indiv.genotype[chosenLocus][1])
 			logPr += log(alleleFreqs[Indiv.migrantPopln][chosenLocus][Indiv.genotype[chosenLocus][0]]*alleleFreqs[Indiv.samplePopln][chosenLocus][Indiv.genotype[chosenLocus][1]]);
 		else
 			logPr += log(alleleFreqs[Indiv.migrantPopln][chosenLocus][Indiv.genotype[chosenLocus][0]]*alleleFreqs[Indiv.samplePopln][chosenLocus][Indiv.genotype[chosenLocus][1]]+
 							 alleleFreqs[Indiv.migrantPopln][chosenLocus][Indiv.genotype[chosenLocus][1]]*alleleFreqs[Indiv.samplePopln][chosenLocus][Indiv.genotype[chosenLocus][0]]);
 	}
-	return logPr;		
+	return logPr;
 }
 
 void proposeMigrantAncDrop(unsigned int &migrantPopln, unsigned int &migrantAge, unsigned int samplePopln, int noPopln, long int ***migrantCounts)
 {
-	
+
 	bool emptyMigrantCounts=true;
 	unsigned int proposedPopln=0, proposedAge=0;
 	while(emptyMigrantCounts)
 	{
-		int proposedIndex = gsl_rng_uniform_int(r,2*noPopln-1);	
+		int proposedIndex = gsl_rng_uniform_int(r,2*noPopln-1);
 		if(proposedIndex==0)
 		{ proposedPopln = samplePopln; proposedAge=0; }
-		else 
+		else
 		{
 			int j=1; proposedPopln=0; proposedAge=1;
 			if (proposedPopln == samplePopln)
 				proposedPopln += 1;
-			while (j < proposedIndex) 
+			while (j < proposedIndex)
 			{
-				if (proposedAge == 2) 
+				if (proposedAge == 2)
 				{
 					proposedPopln += 1;
 					proposedAge = 1;
 				}
-				else 
+				else
 				{
 					proposedAge = 2;
 				}
@@ -1676,7 +1690,7 @@ void proposeMigrantAncDrop(unsigned int &migrantPopln, unsigned int &migrantAge,
 				j += 1;
 			}
 		}
-			if (migrantCounts[samplePopln][proposedPopln][proposedAge] > 0) 
+			if (migrantCounts[samplePopln][proposedPopln][proposedAge] > 0)
 				emptyMigrantCounts = false;
 	}
 	migrantPopln = proposedPopln;
@@ -1684,32 +1698,32 @@ void proposeMigrantAncDrop(unsigned int &migrantPopln, unsigned int &migrantAge,
 }
 
 
-void proposeMigrantAncAdd(unsigned int &migrantPopAdd, unsigned int &migrantAgeAdd, unsigned int migrantPopDrop, unsigned int migrantAgeDrop, 
+void proposeMigrantAncAdd(unsigned int &migrantPopAdd, unsigned int &migrantAgeAdd, unsigned int migrantPopDrop, unsigned int migrantAgeDrop,
 						  unsigned int samplePopln, int noPopln)
 {
-	
+
 	bool IsDroppedMigrant=true;
 	unsigned int proposedPopln=0, proposedAge=0;
 	while(IsDroppedMigrant)
 	{
-		int proposedIndex = gsl_rng_uniform_int(r,2*noPopln-1);	
+		int proposedIndex = gsl_rng_uniform_int(r,2*noPopln-1);
 		if(proposedIndex==0)
 		{ proposedPopln = samplePopln; proposedAge=0; }
-		else 
+		else
 		{
 			int j=1; proposedPopln=0; proposedAge=1;
 			if (proposedPopln == samplePopln)
 				proposedPopln += 1;
-			while (j < proposedIndex) 
+			while (j < proposedIndex)
 			{
 			/*	if (proposedPopln == samplePopln)
 					proposedPopln += 1; */
-				if (proposedAge == 2) 
+				if (proposedAge == 2)
 				{
 					proposedPopln += 1;
 					proposedAge = 1;
 				}
-				else 
+				else
 				{
 					proposedAge = 2;
 				}
@@ -1717,15 +1731,10 @@ void proposeMigrantAncAdd(unsigned int &migrantPopAdd, unsigned int &migrantAgeA
 				j += 1;
 			}
 		}
-		if ((proposedAge!=migrantAgeDrop)||(proposedPopln!=migrantPopDrop)) 
+		if ((proposedAge!=migrantAgeDrop)||(proposedPopln!=migrantPopDrop))
 			IsDroppedMigrant = false;
 	}
 	migrantPopAdd = proposedPopln;
 	migrantAgeAdd = proposedAge;
 	if((migrantPopAdd==samplePopln)&&(migrantAgeAdd!=0)) cerr << "\n proposing own popln as migrant popln!\n";
 }
-
-
-
-
-
