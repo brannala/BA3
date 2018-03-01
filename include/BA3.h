@@ -30,8 +30,8 @@
 
 using namespace std;
 
-const int MAXLOCI=420;
-const int MAXALLELE=300;
+const int MAXLOCI=50000;
+const int MAXALLELE=4;
 const int MAXPOPLN=100;
 const int MAXINDIV=5000;
 const int MAXLINELENGTH=1000000;
