@@ -7,6 +7,9 @@
  *
  */
 
+#define SNP /* compiling for SNP data */
+// #define MSAT /* compiling for microsatellite data */ 
+
 #ifndef BA3_HEADERS
 #define BA3_HEADERS
 #include <iostream>
@@ -30,11 +33,21 @@
 
 using namespace std;
 
+#ifdef SNP
 const int MAXLOCI=50000;
 const int MAXALLELE=4;
 const int MAXPOPLN=100;
 const int MAXINDIV=5000;
 const int MAXLINELENGTH=1000000;
+#endif
+
+#ifdef MSAT
+const int MAXLOCI=100;
+const int MAXALLELE=500;
+const int MAXPOPLN=100;
+const int MAXINDIV=5000;
+const int MAXLINELENGTH=1000000;
+#endif
 
 struct indiv
 {
