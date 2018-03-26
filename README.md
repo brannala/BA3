@@ -28,7 +28,7 @@ the INSTALL file in this distribution for more detailed instructions.
 For information about specific platforms and compilers see the
 "Compilation Notes" section in the INSTALL file.
 
-More information about InferRho
+More information about BayesAss
 ==========================
 
 The project homepage is http://www.rannala.org
@@ -58,8 +58,8 @@ program is compiled without optimization.  Thank you.
 Any errors or omissions in the manual can also be reported to the
 same address.
 
-Contributing to InferRho
+Contributing to BayesAss
 ===================
 
 If you are interested in participating in BA3 development, please see
-the webpage at http://www.rannala.org
+the github repository at https://github.com/brannala/BA3/
