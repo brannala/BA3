@@ -7,7 +7,7 @@
  *
  */
 
-#define SNP /* compiling for SNP data */
+// #define SNP  compiling for SNP data */
 // #define MSAT /* compiling for microsatellite data */ 
 
 #ifndef BA3_HEADERS
