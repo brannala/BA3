@@ -1,0 +1,22 @@
+# Compiling BA3 from source
+This document describes the steps needed to compile BA3 from source code. If you are unfamiliar with the process of compiling software in a Unix environment it is recommended that you instead download one of the precompiled binaries (for OS X, Windows and Linux) available as a release at github.com/brannala/BA3/releases.
+# Requirements:
+C++ compiler (the default Makefile assumes a GNU compiler g++ is available)
+GNU Scientific Library installed in the default locations (available at www.gnu.org/software/gsl/)
+BA3 source code (available at https://github.com/brannala/BA3/releases)
+# Steps
+1. Download and decompress the source code file or clone the git repository.
+For example, in a Unix environment first insure git is installed (by typing git --version for example) and then use:
+git clone https://github.com/brannala/BA3.git
+cd BA3
+2. If you have gsl installed in the default location compile the executable for SNP version of BA3 using the command:
+make BA3SNP
+Compile the executable for the microsatellite (MSAT) version of BA3 using the command:
+make BA3MSAT
+Compile both executables using the command
+make all
+# Potential Issues
+If you do not have gsl installed in the usual location you will need to specify the location of the library and header files as variables to make. For example, if you compile gsl in your home directory and the headers are in ~/mygsl/include and the library in ~/mygsl/lib you call make as follows:
+make all INCLFLAGS='-I/~mygsl/include/' LIBFLAGS='-L~/mygsl/lib'
+# Assistance
+If you have problems compiling send me an email at brannala@ucdavis.edu.
