@@ -308,15 +308,23 @@ int main( int argc, char *argv[] )
 		{
 		  if((sampleIndiv[i].genotype[j][0] == -1)||(sampleIndiv[i].genotype[j][1] == -1))
 		     {
-				noMissingGenotypes+=1;
-				sampleIndiv[i].missingGenotypes.push_back(j);
-				sampleIndiv[i].genotype[j][0] = gsl_rng_uniform_int(r, noAlleles[j]);
-				sampleIndiv[i].genotype[j][1] = gsl_rng_uniform_int(r, noAlleles[j]);
-				if (!hasMissing)
-				{
-					missingData.push_back(i);
-					hasMissing=true;
-				}
+
+		       if (noAlleles[j]==0)
+			 {
+			   std::cerr << "\nerror: missing all data at locus! quitting...\n";
+			   exit(1);
+			 }
+
+		       
+		       noMissingGenotypes+=1;
+		       sampleIndiv[i].missingGenotypes.push_back(j);
+		       sampleIndiv[i].genotype[j][0] = gsl_rng_uniform_int(r, noAlleles[j]);
+		       sampleIndiv[i].genotype[j][1] = gsl_rng_uniform_int(r, noAlleles[j]);
+		       if (!hasMissing)
+			 {
+			   missingData.push_back(i);
+			   hasMissing=true;
+			 }
 		     }
 		}
 	}

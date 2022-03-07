@@ -3,7 +3,7 @@ VPATH = src include
 CFLAGS = --static -O3
 INCLFLAGS = -I/usr/local/include/
 IFLAGS =  -I include
-LIBFLAGS =  -L/usr/local/lib
+LIBFLAGS =  --static -L/usr/local/lib
 LDLIBS = -lgsl -lcblas
 CC=g++
 all: BA3SNP BA3MSAT
