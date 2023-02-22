@@ -23,7 +23,7 @@ The executable BA3MSAT is intended for use with microsatellite (MSAT) data and a
 of 500 alleles per locus, 500 loci, 100 populations and 5000 individuals.
 
 ### 1.1 Mac OS X
-
+#### Using Homebrew package manager
 The simplest way to install BA3 on Mac (or Linux) is using the [homebrew](https://brew.sh/) 
 package manager. Once you have homebrew installed on your machine you can install BA3 using
 the following commands (executed in the Terminal):
