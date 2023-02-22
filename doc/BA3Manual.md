@@ -571,9 +571,13 @@ are $1/2$, with three alleles they are $1/3$ and so on. The prior distribution o
 is uniform on the interval (0, 1) with a mean of $1/2$. The prior on migration rates is
 uniform with the constraint that $m_{ii} \geq 2/3$ and $\sum_i\sum_{j \neq i} m_{ij} \leq 1/3$. The prior means for n
 populations are
-$$\overline{m}_{ii} = \frac{1}{n} + \frac{2}{3} \left(\frac{n-1}{n}\right),$$
+
+$\overline{m}_{ii} = \frac{1}{n} + \frac{2}{3} \left(\frac{n-1}{n}\right),$
+
 and
-$$ \overline{m}_{ij} = \frac{1}{3n} \,\, \mathrm{for} \,\, i \neq j. $$
+
+$\overline{m}_{ij} = \frac{1}{3n} \,\, \mathrm{for} \,\, i \neq j.$
+
 Estimates of the prior variances can be obtained by running the program with option
 ”p.” It is suggested that users compare the posterior densities for their data with these
 prior densities to assess the change from prior to posterior which indicates how much
