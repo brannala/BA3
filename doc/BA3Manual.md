@@ -24,6 +24,15 @@ of 500 alleles per locus, 500 loci, 100 populations and 5000 individuals.
 
 ### 1.1 Mac OS X
 
+The simplest way to install BA3 on Mac (or Linux) is using the [homebrew](https://brew.sh/) 
+package manager. Once you have homebrew installed on your machine you can install BA3 using
+the following commands (executed in the Terminal):
+```
+brew tap brannala/ba3
+brew install ba3
+```
+The program will be installed and the commands `BA3SNP` and `BA3MSAT` will be available in
+the Terminal.
 Download the zip archived ﬁle with the latest version of the software here. Unzip the
 archive by double clicking the downloaded ﬁle. A folder will be created in your current 
 directory containing the program executable ﬁles BA3, example data ﬁles (in subfolder
