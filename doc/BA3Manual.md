@@ -395,7 +395,9 @@ In such cases, the mixing may still be satisfactory as indicated by the trace pl
 MCMC diagnostics. Also note that because the individual migrant ancestry and the miss-
 ing genotypes are both discrete parameters the proposal step lengths are not adjustable
 and the maximum achievable acceptance rate is
-$$ \max P_{accept} = 2(1 − P_{max}), $$
+
+$\max P_{accept} = 2(1 − P_{max}),$
+
 where $P_{max}$ is the largest posterior probability associated with any of the parameters. For
 example, if migrant ancestry state 0 (non-migrant) has posterior probability $0.95$ then the
 maximum posterior acceptance rate is $2(1 − 0.95) = 0.10$. Thus, for some datasets the
