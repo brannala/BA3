@@ -19,9 +19,7 @@
     University of California Davis
 */
 
-#include"BA3.h"
-
-#include<algorithm>
+#include"../include/BA3.h"
 
 // global command line arguments
 
@@ -95,7 +93,12 @@ bool NOFSTATMCMC=false;
 bool NOMISSINGDATA=false;
 bool NOLIKELIHOOD=false;
 
-
+std::vector<std::string> split(const std::string str,
+                               const std::string regex_str) {
+    std::regex regexz(regex_str);
+    return {std::sregex_token_iterator(str.begin(), str.end(), regexz, -1),
+      std::sregex_token_iterator()};
+}
 
 int main( int argc, char *argv[] )
 {
@@ -275,7 +278,7 @@ int main( int argc, char *argv[] )
 	vector<int> missingData;
 
 
-	// read input file
+	checkDataSize();
 	readInputFile(sampleIndiv, noIndiv, noLoci, noPopln, noAlleles);
 
 	double ***ancP;
@@ -1277,6 +1280,69 @@ void printBanner(void)
 	std::cout << "                            Bruce Rannala                           \n";
 	std::cout << "           Department of Evolution and Ecology at UC Davis          \n";
 	std::cout << "\n\n";
+}
+
+void checkDataSize(void)
+{
+  std::string aline;
+  vector<string> indNames;
+  vector<string> popNames;
+  vector<string> locusNames;
+  map<string,set<string>> alleleLabels;
+  
+  while(std::getline(mcmcin,aline))
+    {
+      std::string regex_str = "\\s+"; 
+      std::vector<std::string> list1 = split(aline, regex_str);
+      unsigned int s1 = list1.size();
+      if(s1 != 5)
+	{
+	  std::cerr << "\nerror the line: \"" << aline << "\" has an incorrect number of entries. quitting...\n";
+	  exit(1);
+	}
+      indNames.push_back(list1[0]);
+      popNames.push_back(list1[1]);
+      locusNames.push_back(list1[2]);
+    }
+  mcmcin.clear();
+  mcmcin.seekg( 0, std::ios::beg );
+  std::set<string> namesUniq;
+  std::set<string> popsUniq;
+  std::set<string> lociUniq;
+  for( unsigned i = 0; i < indNames.size(); ++i ) namesUniq.insert( indNames[i] );
+  for( unsigned i = 0; i < popNames.size(); ++i ) popsUniq.insert( popNames[i] );
+  for( unsigned i = 0; i < locusNames.size(); ++i ) lociUniq.insert( locusNames[i] );
+  if(namesUniq.size() > MAXINDIV)
+    {
+      std::cerr << "\nerror: number of individuals:" << namesUniq.size() << " exceeds maximum:" << MAXINDIV << " quitting...\n";
+      exit(1);
+    }
+  if(popsUniq.size() > MAXPOPLN)
+    {
+      std::cerr << "\nerror: number of populations:" << popsUniq.size() << " exceeds maximum:" << MAXPOPLN << " quitting...\n";
+      exit(1);
+    }
+  if(lociUniq.size() > MAXLOCI)
+    {
+      std::cerr << "\nerror: number of loci:" << lociUniq.size() << " exceeds maximum:" << MAXLOCI << " quitting...\n";
+      exit(1);
+    }
+  while(std::getline(mcmcin,aline))
+	{
+	  std::string regex_str = "\\s+"; 
+	  std::vector<std::string> list1 = split(aline, regex_str);
+	  alleleLabels[list1[2]].insert(list1[3]);
+	  alleleLabels[list1[2]].insert(list1[4]);
+	}
+  for (auto all = alleleLabels.begin(); all != alleleLabels.end(); all++) {
+    if(all->second.size() > MAXALLELE)
+      {
+	std::cerr << "\nerror: number of alleles at locus " << all->first << " is:" << all->second.size() << " exceeds maximum:" << MAXALLELE << " quitting...\n";
+	exit(1);
+      }
+  }
+  mcmcin.clear();
+  mcmcin.seekg( 0, std::ios::beg );
 }
 
 void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLoci, unsigned int &noPopln, unsigned int *noAlleles)

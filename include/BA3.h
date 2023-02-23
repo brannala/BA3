@@ -16,10 +16,13 @@
 #include <iomanip>
 #include <fstream>
 #include <vector>
+#include <algorithm>
+#include <regex>
 #include <string>
 #include <string.h>
 #include <sstream>
 #include <map>
+#include <set>
 #include <math.h>
 #include <gsl/gsl_sf_gamma.h>
 #include <gsl/gsl_rng.h>
@@ -42,7 +45,7 @@ const int MAXLINELENGTH=1000000;
 #endif
 
 #ifdef MSAT
-const int MAXLOCI=100;
+const int MAXLOCI=500;
 const int MAXALLELE=500;
 const int MAXPOPLN=100;
 const int MAXINDIV=5000;
@@ -65,6 +68,7 @@ struct ancestryProbs
 };
 
 void printBanner(void);
+void checkDataSize(void);
 void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLoci, unsigned int &noPopln, unsigned int *noAlleles);
 void getEmpiricalAlleleFreqs(double ***alleleFreqs, indiv *sampleIndiv, unsigned int *noAlleles, unsigned int noPopln, unsigned int noLoci, unsigned int noIndiv);
 void fillMigrantCounts(indiv *sampleIndiv, long int ***migrantCounts, unsigned int noIndiv, unsigned int noPopln);
