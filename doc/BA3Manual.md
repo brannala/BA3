@@ -8,7 +8,7 @@ Last updated 21 Feb 2023
 
 ## 1 Installation
 
-The latest version of BA3 (version 3.0.4) can be downloaded 
+The latest version of BA3 (version 3.0.5) can be downloaded 
 [here](https://github.com/brannala/BA3/releases). Unzip the archive by
 double clicking the downloaded ﬁle. A folder will be created in your current directory
 containing the program documentation, source code and/or precompiled binary ﬁles for
@@ -18,13 +18,14 @@ and are adventurous you can try compiling the source code (see below), otherwise
 to the instructions below to use a precompiled binary ﬁle for your speciﬁc computer
 operating system. There are two different executable files for each operating system. The
 executable BA3SNP is intended for use with single nucleotide polymorphism (SNP) data and 
-allows a maximum of 4 alleles per locus, 30,000 loci, 20 populations and 2,000 individuals. 
+allows a maximum of 4 alleles per locus, 50,000 loci, 100 populations and 5,000 individuals. 
 The executable BA3MSAT is intended for use with microsatellite (MSAT) data and allows a maximum
 of 500 alleles per locus, 500 loci, 100 populations and 5000 individuals.
 
 ### 1.1 Mac OS X
 #### Using Homebrew package manager
-The simplest way to install BA3 on Mac (or Linux) is using the [homebrew](https://brew.sh/) 
+
+The recommended way to install BA3 on Mac (or Linux) is using the [homebrew](https://brew.sh/) 
 package manager. Once you have homebrew installed on your machine you can install BA3 using
 the following commands (executed in the Terminal):
 ```
@@ -32,13 +33,18 @@ brew tap brannala/ba3
 brew install ba3
 ```
 The program will be installed and the commands `BA3SNP` and `BA3MSAT` will be available in
-the Terminal.
-Download the zip archived ﬁle with the latest version of the software here. Unzip the
+the Terminal. You will want to download the documentation and example files from 
+here: [BA3 manual and examples]().
+
+#### Using precompiled executables
+
+Download the zip archived ﬁle with the latest version of the software 
+[here](https://github.com/brannala/BA3/releases). Unzip the
 archive by double clicking the downloaded ﬁle. A folder will be created in your current 
-directory containing the program executable ﬁles BA3, example data ﬁles (in subfolder
+directory containing the program executable ﬁles `BA3SNP` and `BA3MSAT`, example data ﬁles (in subfolder
 examples), and this manual (in subfolder docs). Note that there are two binaries available:
-“pre7” for users running Mac OSX version 6 or earlier and ”post7” for users running Mac
-OS X version 7 and later.
+“M” for users of newer M1 or M2 CPU Macs and "I" for users of older Intel CPU Macs. The Intel executable
+will run on M1/M2 Macs but this is through emulation and is not recommended.
 
 ### 1.2 Windows
 
@@ -50,7 +56,13 @@ ing the program executable ﬁle BA3.exe, example data ﬁles (in subfolder exam
 this manual (in subfolder docs). There are no longer and shared libraries that need to be
 installed for the Windows version of BA3.
 
-1
+### 1.3 Linux
+
+Download the zip or tar.gz archived ﬁle with the latest version of the software 
+[here](https://github.com/brannala/BA3/releases). Unzip the
+archive by double clicking the downloaded ﬁle. A folder will be created in your current 
+directory containing the program executable ﬁles `BA3SNP` and `BA3MSAT`, example data ﬁles (in subfolder
+examples), and this manual (in subfolder docs). 
 
 ### 1.3 Compiling the program
 
