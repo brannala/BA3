@@ -64,9 +64,7 @@ following terminal commands in the directory that contains the source tarball:
 ```
 tar -xvzf BA3-*.tar.gz
 cd BA3-*
-./configure
 ./make all
-sudo ./make install
 ```
 This should install the executable ﬁle BA3 into an appropriate bin directory that is in the
 user’s default shell path (often /usr/bin or /local/bin) and typing BA3 at the command
