@@ -1,6 +1,6 @@
 # BA3
+
 ## BayesAss edition 3
-============================
 
 This is BayesAss edition 3 (BA3), a program for inference of recent immigration rates between populations using unlinked multilocus genotypes.
 
@@ -15,17 +15,15 @@ WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 
 ## Availability
-============
 
-The current stable version of BA3 is always available from (https://github.com/brannala/BA3/releases)
+The current stable version of BA3 is always available from [releases](https://github.com/brannala/BA3/releases)
 
 ## Manual
-============
-The program manual is available at (https://github.com/brannala/BA3/wiki)
+
+The program manual is available at [BA3 Manual](https://github.com/brannala/BA3/wiki)
 
 
 ## Installation
-============
 
 BA3 follows the standard GNU installation procedure.  Please consult
 the INSTALL file in this distribution for more detailed instructions.
@@ -34,14 +32,12 @@ For information about specific platforms and compilers see the
 "Compilation Notes" section in the INSTALL file.
 
 ## More information about BayesAss
-==========================
 
-The project homepage is (https://github.com/brannala/BA3)
+The project homepage is [BA3 on github](https://github.com/brannala/BA3)
 
 See the NEWS file for recent changes to the program.
 
 ## Reporting Bugs
-==============
 
 A list of known bugs can be found in the BUGS file.  Details of
 compilation problems can be found in the INSTALL file.
@@ -64,7 +60,6 @@ Any errors or omissions in the manual can also be reported to the
 same address.
 
 ## Contributing to BayesAss
-===================
 
 If you are interested in participating in BA3 development, please see
 the github repository at https://github.com/brannala/BA3/
