@@ -11,15 +11,15 @@ Last updated 21 Feb 2023
 The latest version of BA3 (version 3.0.5) can be downloaded 
 [here](https://github.com/brannala/BA3/releases). Unzip the archive by
 double clicking the downloaded ﬁle. A folder will be created in your current directory
-containing the program documentation, source code and/or precompiled binary ﬁles for
+containing the source code and/or precompiled binary ﬁles for
 various computer operating systems. There is also an examples directory containing two
 example input ﬁles with samples from either 2 or 3 populations. If you have a compiler
 and are adventurous you can try compiling the source code (see below), otherwise refer 
 to the instructions below to use a precompiled binary ﬁle for your speciﬁc computer
 operating system. There are two different executable files for each operating system. The
-executable BA3SNP is intended for use with single nucleotide polymorphism (SNP) data and 
+executable `BA3SNP` is intended for use with single nucleotide polymorphism (SNP) data and 
 allows a maximum of 4 alleles per locus, 50,000 loci, 100 populations and 5,000 individuals. 
-The executable BA3MSAT is intended for use with microsatellite (MSAT) data and allows a maximum
+The executable `BA3MSAT` is intended for use with microsatellite (MSAT) data and allows a maximum
 of 500 alleles per locus, 500 loci, 100 populations and 5000 individuals.
 
 ### 1.1 Mac OS X
@@ -33,8 +33,8 @@ brew tap brannala/ba3
 brew install ba3
 ```
 The program will be installed and the commands `BA3SNP` and `BA3MSAT` will be available in
-the Terminal. You will want to download the documentation and example files from 
-here: [BA3 manual and examples]().
+the Terminal. You will want to download the documentation and example files (BA3-docs-examples.zip) from 
+[here](https://github.com/brannala/BA3/releases).
 
 #### Using precompiled executables
 
@@ -48,12 +48,12 @@ will run on M1/M2 Macs but this is through emulation and is not recommended.
 
 ### 1.2 Windows
 
-Download the zip archived ﬁle with the latest version of the software here. Choose either
-the ﬁle BA3Windows32.zip or BA3Windows64.zip depending on whether you are run-
+Download the zip archived ﬁle with the latest version of the software [here](https://github.com/brannala/BA3/releases). 
+Choose either the ﬁle `BA3Windows32.zip` or `BA3Windows64.zip` depending on whether you are run-
 ning a 32 bit (older) or 64 bit (newer) version of Windows. Unzip the archive by double
 clicking the downloaded ﬁle. A folder will be created in your current directory contain-
-ing the program executable ﬁle BA3.exe, example data ﬁles (in subfolder examples), and
-this manual (in subfolder docs). There are no longer and shared libraries that need to be
+ing the program executable ﬁles `BA3SNP.exe` and `BA3MSAT.exe`, example data ﬁles (in subfolder examples), and
+this manual (in subfolder docs). There are no longer any shared libraries that need to be
 installed for the Windows version of BA3.
 
 ### 1.3 Linux
@@ -70,18 +70,18 @@ You do not need to compile the program if you have been successful following eit
 steps 1.1 or 1.2 above. The source code for the program is found in the source tarball
 distribution ﬁle named BA3-*.*.*.tar.gz where * indicate the version numbers. The
 program uses routines from the gnu scientiﬁc library (gsl) and this library (and header
-ﬁles) must be installed prior to compiling. The gsl library can be found here. If using a
-command line C++ compiler (e.g., g++, c++, etc), with gsl installed, simply execute the
+ﬁles) must be installed prior to compiling. The gsl library can be found [here](https://www.gnu.org/software/gsl/). 
+It is recommended that you install the gsl library using a package manager such
+as apt in Ubuntu linux or homebrew on Macs. If using a
+command line C++ compiler (e.g., g++, c++, etc), with gsl installed in the standard location, simply execute the
 following terminal commands in the directory that contains the source tarball:
 ```
 tar -xvzf BA3-*.tar.gz
 cd BA3-*
 ./make all
 ```
-This should install the executable ﬁle BA3 into an appropriate bin directory that is in the
-user’s default shell path (often /usr/bin or /local/bin) and typing BA3 at the command
-prompt will then execute the program. The procedures for compiling in Windows using
-the Cygwin package are essentially identical.
+This will create the executable ﬁles `BA3SNP` and `BA3MSAT`  in the current directory and typing ./BA3 at the command
+prompt will then execute the program. The procedures for compiling in Windows using the Cygwin package are essentially identical.
 
 ## 2 Running the program
 
@@ -92,12 +92,23 @@ you can ﬁnd a beginners guide here. Detailed instructions for running the prog
 the Mac OS X (or other unix-based) operating system are provided below.
 
 ### 2.1 Getting BA3 up and running on Mac OS X or Unix
+#### 2.1.1 Running BA3 installed with Homebrew
+Download the examples and documentation `BA3-docs-examples.zip` and uncompress. If you uncompress 
+the files on your desktop then in the Terminal type:
+```
+cd /Users/<login>/Desktop/BA3-docs-examples
+```
+to run a 2 population example dataset using the miscrosatellite version of the program type:
+```
+BA3MSAT -v examples/2pop.txt
+```
 
 To run the program, you will ﬁrst need to start the terminal application which can be
 found in the Applications/Utilities folder on a Mac. A short tutorial on using the Mac OS
 X terminal can be found here. The following description assumes that you have unzipped
 the BA3 distribution ﬁle on the Desktop. If you have placed it elsewhere you will need to
-change the commands to indicate the correct ﬁle path. Once you open terminal you will
+change the commands to indicate the correct ﬁle path. If you installed BA3 using Homebrew
+then the commands `BA3SNP` and `BA3MSAT` will be directly available. Once you open terminal you will
 see a command line prompt. On a Mac, at the prompt type:
 ```
 cd /Users/<login>/Desktop/BA3.*/binary/macosx
