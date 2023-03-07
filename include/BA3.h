@@ -49,11 +49,14 @@
 
 using namespace std;
 
+const string VERSION="3.0.5";
+const string RELEASEDATE="3/6/2023";
+
 #ifdef SNP
-const int MAXLOCI=50000;
+const int MAXLOCI=30000;
 const int MAXALLELE=4;
 const int MAXPOPLN=100;
-const int MAXINDIV=5000;
+const int MAXINDIV=3000;
 const int MAXLINELENGTH=1000000;
 #endif
 

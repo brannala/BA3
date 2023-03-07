@@ -118,9 +118,9 @@ int main( int argc, char *argv[] )
 	/* Initialize gArgs */
 
 	gArgs.seed = 10;
-	gArgs.mciter = 1000000;
+	gArgs.mciter = 500000;
 	gArgs.sampling = 100;
-	gArgs.burnin = 100000;
+	gArgs.burnin = 50000;
 	gArgs.deltaM = 0.10;
 	gArgs.deltaA = 0.10;
 	gArgs.deltaF = 0.10;
@@ -1276,8 +1276,8 @@ mcmcout << "\n Population Index -> Population Label:\n\n";
 void printBanner(void)
 {
 	std::cout << "\n\n";
-	std::cout << "                    BayesAss Edition 3.0.4 (BA3)                    \n";
-	std::cout << "                        Released: 09/28/2015                        \n";
+	std::cout << "                    BayesAss Edition " << VERSION << " (BA3)                    \n";
+	std::cout << "                        Released: " << RELEASEDATE << "                        \n";
 	std::cout << "                            Bruce Rannala                           \n";
 	std::cout << "           Department of Evolution and Ecology at UC Davis          \n";
 	std::cout << "\n\n";
