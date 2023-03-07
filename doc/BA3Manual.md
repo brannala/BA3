@@ -144,7 +144,7 @@ where the BA3 program binary resides. To run the program using an example data
 ./BA3SNP -v examples/3pop.txt
 ```
 The preﬁx ./ means “current directory” and tells the operating system to look for the
-program ﬁle named BA3 in the current working directory. The program option -v speciﬁes
+program ﬁle named `BA3SNP` in the current working directory. The program option -v speciﬁes
 “verbose” output and causes BA3 to print out more detailed information to the screen
 when the program is running. 
 #### 2.1.3 Program screen output
@@ -178,7 +178,7 @@ logP(M): -1619.30 logL(G): 0.00 logL: -1619.30 % done: (1.00) % accepted: (0.15,
 MCMC run completed. Output written to BA3out.txt
 ```
 The program will create an output ﬁle in the current working directory when it has
-ﬁnished running. By default the output ﬁle is named BA3out.txt. You can double click on
+ﬁnished running. By default the output ﬁle is named `BA3out.txt`. You can double click on
 this ﬁle to open it with the Mac text editor and see the results.
 
 ### 2.2 Getting BA3 up and running on Windows
@@ -211,7 +211,8 @@ individual’s source population, `locID` is a unique identiﬁer for the locus,
 and `allele2` are the allele labels for each allele of the individual’s genotype. The order of
 the alleles on the line is arbitrary. Missing alleles are represented using a 0. If there are n
 individuals and L loci there will be n × L lines in the input ﬁle. See the example data ﬁles
-distributed with the program.
+distributed with the program. If you have genomic data in VCF file format you can use the 
+ugnix tools to convert the data to BA3 format as described [here](https://github.com/brannala/ugnix/wiki/VCF-to-BA3-File-Conversion). 
 
 ## 4 Command line options
 
