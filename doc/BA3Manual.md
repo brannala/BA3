@@ -49,10 +49,10 @@ will run on M1/M2 Macs but this is through emulation and is not recommended.
 ### 1.2 Windows
 
 Download the zip archived ﬁle with the latest version of the software [here](https://github.com/brannala/BA3/releases). 
-Choose either the ﬁle `BA3Windows32.zip` or `BA3Windows64.zip` depending on whether you are run-
-ning a 32 bit (older) or 64 bit (newer) version of Windows. Unzip the archive by double
-clicking the downloaded ﬁle. A folder will be created in your current directory contain-
-ing the program executable ﬁles `BA3SNP.exe` and `BA3MSAT.exe`, example data ﬁles (in subfolder examples), and
+Choose either the ﬁle `BA3Windows32.zip` or `BA3Windows64.zip` depending on whether you are running a 32 bit (older) 
+or 64 bit (newer) version of Windows. Unzip the archive by double
+clicking the downloaded ﬁle. A folder will be created in your current directory containing 
+the program executable ﬁles `BA3SNP.exe` and `BA3MSAT.exe`, example data ﬁles (in subfolder examples), and
 this manual (in subfolder docs). There are no longer any shared libraries that need to be
 installed for the Windows version of BA3.
 
@@ -88,7 +88,8 @@ prompt will then execute the program. The procedures for compiling in Windows us
 The BA3 program is a command line program. If you are familiar with the unix terminal 
 you will ﬁnd it straightforward to use as it adheres to standard unix conventions for
 command line options, etc. If you have never used a terminal (command line) program
-you can ﬁnd a beginners guide here. Detailed instructions for running the program on
+you can ﬁnd a beginners guide [here](https://people.ischool.berkeley.edu/~kevin/unix-tutorial/toc.html). 
+Detailed instructions for running the program on
 the Mac OS X (or other unix-based) operating system are provided below.
 
 ### 2.1 Getting BA3 up and running on Mac OS X or Unix
@@ -98,11 +99,14 @@ the files on your desktop then in the Terminal type:
 ```
 cd /Users/<login>/Desktop/BA3-docs-examples
 ```
-to run a 2 population example dataset using the miscrosatellite version of the program type:
+to run a 2 population example dataset using the microsatellite version of the program type:
 ```
 BA3MSAT -v examples/2pop.txt
 ```
-
+You can also test the SNP version of the program since the example datasets only have 2 alleles per locus:
+```
+BA3SNP -v examples/2pop.txt
+```
 To run the program, you will ﬁrst need to start the terminal application which can be
 found in the Applications/Utilities folder on a Mac. A short tutorial on using the Mac OS
 X terminal can be found here. The following description assumes that you have unzipped
