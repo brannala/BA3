@@ -135,8 +135,8 @@ when the program is running.
 You should see output similar to the following:
 ```
 
-                       BayesAss Edition 3.0.4 (BA3)
-                           Released: 09/28/2015
+                       BayesAss Edition 3.0.5 (BA3)
+                           Released: 3/6/2023
                                Bruce Rannala
                Department of Evolution and Ecology at UC Davis
 
@@ -168,15 +168,15 @@ this ﬁle to open it with the Mac text editor and see the results.
 ### 2.2 Getting BA3 up and running on Windows
 
 You will ﬁrst need to run the Windows ”Command Prompt” program which will open a
-console that you can use to run the BA3.exe program. At the command prompt use the
-”cd” command to move to the directory where the ﬁle BA3.exe is found. For example,
+console that you can use to run the `BA3SNP.exe` or `BA3MSAT.exe` programs. At the command prompt use the
+”cd” command to move to the directory where the ﬁles `BA3SNP.exe` and `BA3MSAT.exe` are found. For example,
 ```
 C:\Users\bruce>cd Desktop\BA3Windows32
 C:\Users\bruce\Desktop\BA3Windows32
 ```
 To run the example ﬁle 3pop.txt verbosely use the command:
 ```
-C:\Users\bruce\Desktop\BA3Windows32>BA3.exe -v examples\3pop.txt
+C:\Users\bruce\Desktop\BA3Windows32>BA3MSAT.exe -v examples\3pop.txt
 ```
 ## 3 Data ﬁle format
 
