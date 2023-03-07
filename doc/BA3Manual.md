@@ -4,7 +4,7 @@ Bruce Rannala
 
 &copy;2007 University of California Davis
 
-Last updated 21 Feb 2023
+Last updated 6 Mar 2023
 
 ## 1 Installation
 
