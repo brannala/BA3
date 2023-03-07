@@ -1289,7 +1289,7 @@ void checkDataSize(void)
   vector<string> indNames;
   vector<string> popNames;
   vector<string> locusNames;
-  map<string,set<string>> alleleLabels;
+  map<string,set<string> > alleleLabels;
   
   while(std::getline(mcmcin,aline))
     {
