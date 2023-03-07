@@ -227,7 +227,7 @@ the ﬁle myout.txt and using the input ﬁle myin.txt. Some options such as the
 specifying the number of iterations, `-i`, take parameter values while others such as `-v`
 do not. Parameter values should follow the option speciﬁer and may, or may not, be
 separated from the option speciﬁer by a space. For example, the following
-are all equivalent ways to specify 1, 000, 000 iterations:
+are all equivalent ways to specify 1,000,000 iterations:
 ```
 ./BA3SNP -i1000000 myin.txt
 ./BA3SNP -i 1000000 myin.txt
@@ -261,22 +261,22 @@ longer forms are available solely because some persons ﬁnd them easier to reme
 ### 4.1 Random number generator seed
 
 The option -s (--seed) is used to specify a positive integer used to ”seed” the random
-number generator algorithm. A deterministic algorithm is used to generate pseudo-
-random numbers during the MCMC such that the sequence of random numbers is en-
-tirely determined by the starting seed. Thus, separate runs of the program started using
-same seed will produce exactly the same outcome. To test whether the program is con-
-verging it is important to carry out several independent runs initiated with different seeds.
+number generator algorithm. A deterministic algorithm is used to generate pseudorandom 
+numbers during the MCMC such that the sequence of random numbers is entirely determined 
+by the starting seed. Thus, separate runs of the program started using
+same seed will produce exactly the same outcome. To test whether the program is converging 
+it is important to carry out several independent runs initiated with different seeds.
 To start the program using 10456 as the random number seed use the following command:
 ```
-./BA3SNP -s=104656
+./BA3SNP -s104656
 ```
 If no seed is speciﬁed the default seed is 10.
 
 ### 4.2 MCMC iterations, burn-in and sampling interval
 
 The command line option -i (--iterations) speciﬁes the number of iterations for the
-Markov chain Monte Carlo (MCMC) analysis. By default the program uses 5, 000, 000 it-
-erations. The number of iterations is an important factor in determining whether a MCMC
+Markov chain Monte Carlo (MCMC) analysis. By default the program uses 5,000,000 
+iterations. The number of iterations is an important factor in determining whether a MCMC
 analysis has converged (see below). In general, a greater number of iterations will be more
 likely to insure convergence but the run-time of the program also increases in proportion
 to the number of iterations. The value of the number of iterations should be a positive
@@ -302,18 +302,18 @@ much smaller, perhaps 100 or 1000. For example,
 ./BA3SNP -i10000000 -b1000000 -n1000 test.txt
 ```
 will run the MCMC for 10 million iterations, discarding the ﬁrst 1 million iterations and
-sampling every 1000 iterations from the remaining 9 million iterations, producing a sam-
-ple of 9000 observations from the chain that will be used to estimate parameters.
+sampling every 1000 iterations from the remaining 9 million iterations, producing a 
+sample of 9000 observations from the chain that will be used to estimate parameters.
 
 ### 4.3 MCMC mixing parameters
 
-For continuous parameters such as migration rates, allele frequencies and inbreeding co-
-efﬁcients, the size of the proposed change to the parameter value at each iteration of the
+For continuous parameters such as migration rates, allele frequencies and inbreeding 
+coefﬁcients, the size of the proposed change to the parameter value at each iteration of the
 MCMC can be adjusted. These adjustments are used to ﬁne-tune the acceptance rates
 for proposals (see discussion below). There are 3 mixing parameter adjustments: -a
 (--deltaA), -f (--deltaF) and -m (--deltaM) that adjust the proposal size for the allele
-frequencies, inbreeding coefﬁcients and migration rates, respectively. Each mixing pa-
-rameter should be a number between 0 and 1, with the size of the proposed move being
+frequencies, inbreeding coefﬁcients and migration rates, respectively. Each mixing 
+parameter should be a number between 0 and 1, with the size of the proposed move being
 proportional to the magnitude of this number.
 
 ### 4.4 Options for printing output
@@ -358,8 +358,8 @@ Running the BA3 program using the command `./BA3SNP -v examples/3pop.txt` produc
 the following screen output:
 ```
 
-                       BayesAss Edition 3.0.4 (BA3)
-                           Released: 09/28/2015
+                       BayesAss Edition 3.0.5 (BA3)
+                           Released: 3/6/2023
                                Bruce Rannala
                Department of Evolution and Ecology at UC Davis
 
@@ -383,10 +383,10 @@ current state of the chain will be printed to screen as follows:
 logP(M): -1618.76 logL(G): -3087.23 logL: -4705.99 % done: [0.07]
 % accepted: (0.31, 0.25, 0.66, 0.76, 0.60)
 ```
-The ﬁrst value `logP(M)` is the log probability of the current conﬁguration of migrant an-
-cestries among individuals, conditional on the current migration rates. The second value
-`logL(G)` is the log-likelihood of the genotype data given the migrant ancestries of indi-
-viduals and the current population allele frequencies. The third value logL is the sum of
+The ﬁrst value `logP(M)` is the log probability of the current conﬁguration of migrant 
+ancestries among individuals, conditional on the current migration rates. The second value
+`logL(G)` is the log-likelihood of the genotype data given the migrant ancestries of 
+individuals and the current population allele frequencies. The third value logL is the sum of
 these two terms. The value in brackets (or parentheses) after done is the percentage of the
 total iterations that have been completed. This proportion is displayed in square brackets
 if the chain is still in the burn-in phase, otherwise it is displayed in parentheses. The ﬁnal
@@ -401,21 +401,21 @@ parameters from left to right:
 
 ### 5.2 Adjustment of mixing parameters
 
-The acceptance rates for proposed changes to parameters 1, 3 and 4 in the above list (mi-
-gration rates, allele frequencies and inbreeding coefﬁcients, respectively) can be adjusted
+The acceptance rates for proposed changes to parameters 1, 3 and 4 in the above list 
+(migration rates, allele frequencies and inbreeding coefﬁcients, respectively) can be adjusted
 by changing the values of the respective mixing parameters. If the acceptance rate is too
 high, the chain does not mix well, often proposing values very near the current value
 (which are accepted) and failing to adequately explore the state space. If the acceptance
 rate is too low the chain rarely accepts the proposed moves which are too different from
-the current value – this also causes poor mixing. Empirical analyses suggest that an ac-
-ceptance rate between 20% and 60% is optimal. In the above example, the acceptance rate
-for proposed changes to migration rate is about 31 % which is adequate. However, the ac-
-ceptance rates for proposed changes to the allele frequencies and inbreeding coefﬁcients
-are 66% and 76% respectively, which are both a bit high. One can decrease the accep-
-tance rate by proposing larger moves (or increase the rate by proposing smaller ones). In
+the current value – this also causes poor mixing. Empirical analyses suggest that an 
+acceptance rate between 20% and 60% is optimal. In the above example, the acceptance rate
+for proposed changes to migration rate is about 31% which is adequate. However, the 
+acceptance rates for proposed changes to the allele frequencies and inbreeding coefﬁcients
+are 66% and 76% respectively, which are both a bit high. One can decrease the acceptance 
+rate by proposing larger moves (or increase the rate by proposing smaller ones). In
 this case, we want to decrease the acceptance rate so we will try increasing the proposal
-step size for the mixing parameters associated with proposed moves of both the allele fre-
-quencies and inbreeding coefﬁcients. The default values of all the mixing parameters are
+step size for the mixing parameters associated with proposed moves of both the allele 
+frequencies and inbreeding coefﬁcients. The default values of all the mixing parameters are
 0.10. We will try increasing the proposal step length to 0.30 for both these proposals. Stop
 the program by typing Control-C in the terminal, then start it again using the following
 command options:
@@ -441,8 +441,8 @@ logP(M): -1618.38 logL(G): -3115.25 logL: -4733.63 % done: [0.08]
 The acceptance rates now look okay so we will next try some longer runs with these
 values for the mixing parameters and create a trace ﬁle to examine convergence. Note
 that it may not always be possible to obtain acceptance rates in the recommended target
-range. If the likelihood surface is very ﬂat, for example, as may occur with weakly infor-
-mative data, acceptance rates above 0.6 may occur even with a proposal step length of 1.
+range. If the likelihood surface is very ﬂat, for example, as may occur with weakly 
+informative data, acceptance rates above 0.6 may occur even with a proposal step length of 1.
 In such cases, the mixing may still be satisfactory as indicated by the trace plot or other
 MCMC diagnostics. Also note that because the individual migrant ancestry and the miss-
 ing genotypes are both discrete parameters the proposal step lengths are not adjustable
@@ -574,8 +574,8 @@ created using the Tracer program
 
 ### 5.5 Interpreting the individual ancestry output in BA3indiv.txt
 
-If the command line option `-g` is used the ﬁle `BA3indiv.txt` is created in the current work-
-ing directory at the end of the MCMC run. If we use the command
+If the command line option `-g` is used the ﬁle `BA3indiv.txt` is created in the current 
+working directory at the end of the MCMC run. If we use the command
 ```
 ./BA3SNP -v -g -a0.30 -f0.50 -t -s100 -i10000000 -b1000000 -n100 \
 -o run1out.txt examples/3pop.txt
@@ -591,10 +591,10 @@ Migrant ancestry>>
 [0,1]:0.000 [1,1]:0.002 [2,1]:0.001
 [0,2]:0.000 [1,2]:0.035 [2,2]:0.031
 ```
-This entry is for individual ind0 sampled from population 0. The genotypes of the in-
-dividual are listed ﬁrst followed by the posterior probabilities of migrant ancestry. The
-notation [i, j] : indexes the population source i and generation j (0=nonmigrant, 1=1st gen-
-eration migrant, 2=second generation migrant) of migrant ancestry. For example, [0,0] is
+This entry is for individual ind0 sampled from population 0. The genotypes of the individual 
+are listed ﬁrst followed by the posterior probabilities of migrant ancestry. The
+notation [i, j] : indexes the population source i and generation j (0=nonmigrant, 1=1st 
+generation migrant, 2=second generation migrant) of migrant ancestry. For example, [0,0] is
 the category of nonmigrants from population 0. If j = 0 the only possible non-zero entry
 is the source population for the individual (in this example popullation 0). If j > 0 the
 only possible non-zero entries are for populations other than the source population. In
@@ -613,15 +613,15 @@ Migrant ancestry>>
 ```
 Here the individual appears most likely to be a ﬁrst generation migrant from population 2 
 (probability 0.483) although there is also non-negligible probability associated with
-the possibilities that the individual is either a non-migrant (probability 0.175) or a ﬁrst-
-generation migrant from population 1 (probability 0.242).
+the possibilities that the individual is either a non-migrant (probability 0.175) or a 
+ﬁrst-generation migrant from population 1 (probability 0.242).
 
 ### 5.6 The Priors
 
 The prior on allele frequencies is uniform Dirichlet. So, with two alleles the prior means
 are $1/2$, with three alleles they are $1/3$ and so on. The prior distribution of the F statistic
 is uniform on the interval (0, 1) with a mean of $1/2$. The prior on migration rates is
-uniform with the constraint that $m_{ii} \geq 2/3$ and $\sum_i\sum_{j \neq i} m_{ij} \leq 1/3$. The prior means for n
+uniform with the constraint that $m_{ii} \geq 2/3$ and $\sum_i\sum_{j \neq i} m_{ij} \leq 1/3$. The prior means for $n$
 populations are
 
 $\overline{m}_{ii} = \frac{1}{n} + \frac{2}{3} \left(\frac{n-1}{n}\right),$
