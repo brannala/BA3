@@ -18,7 +18,7 @@ and are adventurous you can try compiling the source code (see below), otherwise
 to the instructions below to use a precompiled binary ﬁle for your speciﬁc computer
 operating system. There are two different executable files for each operating system. The
 executable `BA3SNP` is intended for use with single nucleotide polymorphism (SNP) data and 
-allows a maximum of 4 alleles per locus, 50,000 loci, 100 populations and 5,000 individuals. 
+allows a maximum of 4 alleles per locus, 30,000 loci, 100 populations and 3000 individuals. 
 The executable `BA3MSAT` is intended for use with microsatellite (MSAT) data and allows a maximum
 of 500 alleles per locus, 500 loci, 100 populations and 5000 individuals. In the examples and
 discussion below the SNP program `BA3SNP` will often be used -- the commands are the same
