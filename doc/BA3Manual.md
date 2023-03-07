@@ -99,20 +99,21 @@ the files on your desktop then in the Terminal type:
 ```
 cd /Users/<login>/Desktop/BA3-docs-examples
 ```
-to run a 2 population example dataset using the microsatellite version of the program type:
+to run a 3 population example dataset using the microsatellite version of the program type:
 ```
-BA3MSAT -v examples/2pop.txt
+BA3MSAT -v examples/3pop.txt
 ```
 You can also test the SNP version of the program since the example datasets only have 2 alleles per locus:
 ```
-BA3SNP -v examples/2pop.txt
+BA3SNP -v examples/3pop.txt
 ```
+#### 2.1.2 Running BA3 installed from binaries on Mac or Linux
 To run the program, you will ﬁrst need to start the terminal application which can be
 found in the Applications/Utilities folder on a Mac. A short tutorial on using the Mac OS
-X terminal can be found here. The following description assumes that you have unzipped
+X terminal can be found [here](https://www.library.unlv.edu/sites/default/files/inline-images/wRkOVKa8PENf9196S4Q6Kpjbo7QwuzviXOI20clS9QHEPtJQY6.pdf). 
+The following description assumes that you have unzipped
 the BA3 distribution ﬁle on the Desktop. If you have placed it elsewhere you will need to
-change the commands to indicate the correct ﬁle path. If you installed BA3 using Homebrew
-then the commands `BA3SNP` and `BA3MSAT` will be directly available. Once you open terminal you will
+change the commands to indicate the correct ﬁle path. Once you open terminal you will
 see a command line prompt. On a Mac, at the prompt type:
 ```
 cd /Users/<login>/Desktop/BA3.*/binary/macosx
@@ -129,7 +130,9 @@ where the BA3 program binary resides. To run the program using an example data
 The preﬁx ./ means “current directory” and tells the operating system to look for the
 program ﬁle named BA3 in the current working directory. The program option -v speciﬁes
 “verbose” output and causes BA3 to print out more detailed information to the screen
-when the program is running. You should see output similar to the following:
+when the program is running. 
+#### 2.1.3 Program screen output
+You should see output similar to the following:
 ```
 
                        BayesAss Edition 3.0.4 (BA3)
