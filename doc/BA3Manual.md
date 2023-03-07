@@ -107,6 +107,19 @@ You can also test the SNP version of the program since the example datasets only
 ```
 BA3SNP -v examples/3pop.txt
 ```
+Note that in the examples that follow the prefix `./` is used before the program command name (e.g., `BA3SNP`), for example
+```
+./BA3SNP -v test.txt
+```
+This prefix represents the current working directory in Unix and should only be used when the executable files
+were manually installed and the program is being run from the directory containing the executable files.
+If your installed the program using Homebrew the executables will be in your path and so the prefix is not needed.
+You instead execute the above command as
+```
+BA3SNP -v text.txt
+```
+If you incorrectly use the prefix Unix will complain that the executable file does not exist
+`./BA3SNP: No such file or directory`.
 #### 2.1.2 Running BA3 installed from binaries on Mac or Linux
 To run the program, you will ﬁrst need to start the terminal application which can be
 found in the Applications/Utilities folder on a Mac. A short tutorial on using the Mac OS
@@ -204,7 +217,7 @@ the way the program runs and the level of detail in the output that it produces.
 command line options are given after the program name and before the input ﬁle name.
 For example,
 ```
-./BA3 -v -i=10000000 -o myout.txt myin.txt
+./BA3SNP -v -i=10000000 -o myout.txt myin.txt
 ```
 executes the program for 1 million iterations using verbose output, writing the output to
 the ﬁle myout.txt and using the input ﬁle myin.txt. Some options such as the option
@@ -213,9 +226,9 @@ do not. Parameter values should follow the option speciﬁer and may, or may not
 separated from the option speciﬁer by a space. For example, the following
 are all equivalent ways to specify 1, 000, 000 iterations:
 ```
-./BA3 -i1000000 myin.txt
-./BA3 -i 1000000 myin.txt
-./BA3 -i  1000000 myin.txt
+./BA3SNP -i1000000 myin.txt
+./BA3SNP -i 1000000 myin.txt
+./BA3SNP -i  1000000 myin.txt
 ```
 Table 1 lists all the command line options with a brief description of their parameters and
 effects. Each option is described in detail in the remainder of this section. Following Unix
@@ -252,7 +265,7 @@ same seed will produce exactly the same outcome. To test whether the program is 
 verging it is important to carry out several independent runs initiated with different seeds.
 To start the program using 10456 as the random number seed use the following command:
 ```
-./BA3 -s=104656
+./BA3SNP -s=104656
 ```
 If no seed is speciﬁed the default seed is 10.
 
@@ -275,7 +288,7 @@ will be used to estimate parameters. Burn-in length is chosen such that the chai
 to have reached the stationary distribution before sampling begins. The burn-in length
 must obviously be less than the total number of iterations. For example,
 ```
-./BA3 -i10000000 -b1000000 test.txt
+./BA3SNP -i10000000 -b1000000 test.txt
 ```
 will run the MCMC for 10 million iterations, discarding the ﬁrst 1 million iterations. In
 this case, 9 million iterations are available for sampling. The option -n (--sampling) is
@@ -283,7 +296,7 @@ used to specify a positive integer that is the interval between samples. This in
 obviously be less than the number of iterations minus the burn-in, but will typically be
 much smaller, perhaps 100 or 1000. For example,
 ```
-./BA3 -i10000000 -b1000000 -n1000 test.txt
+./BA3SNP -i10000000 -b1000000 -n1000 test.txt
 ```
 will run the MCMC for 10 million iterations, discarding the ﬁrst 1 million iterations and
 sampling every 1000 iterations from the remaining 9 million iterations, producing a sam-
@@ -306,7 +319,7 @@ By default, the output produced by BA3 is written to a ﬁle named BA3out.txt th
 program creates in the current working directory. An alternative name for the output ﬁle
 can be speciﬁed using the option -o (--output). For example,
 ```
-./BA3 -o myout.txt test.txt
+./BA3SNP -o myout.txt test.txt
 ```
 executes the program using the input ﬁle test.txt and writes the output to a ﬁle named
 `myout.txt`. The option `-t (--trace)` speciﬁes whether a trace output ﬁle is created that
@@ -338,7 +351,7 @@ explanation of the screen output generated using option `-v`.
 
 ### 5.1 Understanding BA3 screen output
 
-Running the BA3 program using the command `./BA3 -v examples/3pop.txt` produces
+Running the BA3 program using the command `./BA3SNP -v examples/3pop.txt` produces
 the following screen output:
 ```
 
@@ -404,7 +417,7 @@ quencies and inbreeding coefﬁcients. The default values of all the mixing para
 the program by typing Control-C in the terminal, then start it again using the following
 command options:
 ```
-./BA3 -v -a0.30 -f0.30 examples/3pop.txt
+./BA3SNP -v -a0.30 -f0.30 examples/3pop.txt
 ```
 The output from the MCMC run is now as follows:
 ```
@@ -415,7 +428,7 @@ This is much better, but the acceptance rate for proposed changes to the inbreed
 ﬁcients is still a bit high at 45%. We therefore again kill the program run using `Control-C`
 and try again with the following mixing parameters:
 ```
-./BA3 -v -a0.30 -f0.50 examples/3pop.txt
+./BA3SNP -v -a0.30 -f0.50 examples/3pop.txt
 ```
 The output from the MCMC run is now as follows:
 ```
@@ -441,7 +454,7 @@ posterior acceptance rates for these parameters may be very small but the MCMC r
 are still reliable. Enter the following to initiate a longer run with the random seed 100,
 creating a trace ﬁle and printing the output to a ﬁle named `run1out.txt`:
 ```
-./BA3 -v -a0.30 -f0.50 -t -s100 -i10000000 -b1000000 -n100 \
+./BA3SNP -v -a0.30 -f0.50 -t -s100 -i10000000 -b1000000 -n100 \
 -o run1out.txt examples/3pop.txt
 ```
 
@@ -561,7 +574,7 @@ created using the Tracer program
 If the command line option `-g` is used the ﬁle `BA3indiv.txt` is created in the current work-
 ing directory at the end of the MCMC run. If we use the command
 ```
-./BA3 -v -g -a0.30 -f0.50 -t -s100 -i10000000 -b1000000 -n100 \
+./BA3SNP -v -g -a0.30 -f0.50 -t -s100 -i10000000 -b1000000 -n100 \
 -o run1out.txt examples/3pop.txt
 ```
 this produces a `BA3indiv.txt` ﬁle containing an entry for each individual such as the
