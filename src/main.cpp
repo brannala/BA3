@@ -1225,7 +1225,7 @@ mcmcout << "\n Population Index -> Population Label:\n\n";
 			for (unsigned int m=0; m <= 1; m++)
 			{
 				vector<int>::iterator it1,it2;
-				char targ[]={l}, targ2[]={j};
+				char targ[]={static_cast<char>(l)}, targ2[]={static_cast<char>(j)};
 				it1 = search (missingData.begin(), missingData.end(),targ,targ+1);
 				it2 = search (sampleIndiv[l].missingGenotypes.begin(), sampleIndiv[l].missingGenotypes.end(),targ2,targ2+1);
 

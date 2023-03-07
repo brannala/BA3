@@ -5,7 +5,7 @@ INCLFLAGS = -I/usr/local/include/
 IFLAGS =  -I include
 LIBFLAGS =  -L/usr/local/lib
 LDLIBS = -lgsl -lcblas
-CC=g++
+CC=g++ -std=c++11
 all: BA3SNP BA3MSAT
 BA3SNP: mainSNP.o 
 	$(CC) $^ $(CFLAGS) $(LIBFLAGS) $(LDLIBS) -o BA3SNP
