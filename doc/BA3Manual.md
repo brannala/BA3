@@ -20,7 +20,10 @@ operating system. There are two different executable files for each operating sy
 executable `BA3SNP` is intended for use with single nucleotide polymorphism (SNP) data and 
 allows a maximum of 4 alleles per locus, 50,000 loci, 100 populations and 5,000 individuals. 
 The executable `BA3MSAT` is intended for use with microsatellite (MSAT) data and allows a maximum
-of 500 alleles per locus, 500 loci, 100 populations and 5000 individuals.
+of 500 alleles per locus, 500 loci, 100 populations and 5000 individuals. In the examples and
+discussion below the SNP program `BA3SNP` will often be used -- the commands are the same
+for both `BA3SNP` and `BA3MSAT` -- you should always use the appropriate executable file for your
+dataset (SNP or miscrosatellite).
 
 ### 1.1 Mac OS X
 #### Using Homebrew package manager
@@ -113,8 +116,8 @@ Note that in the examples that follow the prefix `./` is used before the program
 ```
 This prefix represents the current working directory in Unix and should only be used when the executable files
 were manually installed and the program is being run from the directory containing the executable files.
-If your installed the program using Homebrew the executables will be in your path and so the prefix is not needed.
-You instead execute the above command as
+If you installed the program using Homebrew then the executables will already be in your path and so the prefix is not needed.
+You would instead execute the above command as
 ```
 BA3SNP -v text.txt
 ```
@@ -138,7 +141,7 @@ the current working directory from the user’s home directory (the default) to 
 where the BA3 program binary resides. To run the program using an example data
 ﬁle with 3 populations (contained in the subdirectory examples) type the following command:
 ```
-./BA3 -v examples/3pop.txt
+./BA3SNP -v examples/3pop.txt
 ```
 The preﬁx ./ means “current directory” and tells the operating system to look for the
 program ﬁle named BA3 in the current working directory. The program option -v speciﬁes
