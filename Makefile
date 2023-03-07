@@ -1,6 +1,6 @@
 P = BA3
 VPATH = src include
-CFLAGS = --static -O3
+CFLAGS = -O3
 INCLFLAGS = -I/usr/local/include/
 IFLAGS =  -I include
 LIBFLAGS =  -L/usr/local/lib
