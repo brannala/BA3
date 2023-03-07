@@ -210,12 +210,12 @@ executes the program for 1 million iterations using verbose output, writing the 
 the ﬁle myout.txt and using the input ﬁle myin.txt. Some options such as the option
 specifying the number of iterations, `-i`, take parameter values while others such as `-v`
 do not. Parameter values should follow the option speciﬁer and may, or may not, be
-separated from the option speciﬁer by a space or an `=` sign. For example, the following
+separated from the option speciﬁer by a space. For example, the following
 are all equivalent ways to specify 1, 000, 000 iterations:
 ```
 ./BA3 -i1000000 myin.txt
 ./BA3 -i 1000000 myin.txt
-./BA3 -i=1000000 myin.txt
+./BA3 -i  1000000 myin.txt
 ```
 Table 1 lists all the command line options with a brief description of their parameters and
 effects. Each option is described in detail in the remainder of this section. Following Unix
@@ -224,22 +224,21 @@ preceded by - and a longer, one word form preceded by --, for example the ”ver
 output” command can be speciﬁed on the command line as either `-v` or `--verbose`. The
 longer forms are available solely because some persons ﬁnd them easier to remember.
 
-| Option            | Values                | Effect                                      |
-|:------------------|:----------------------|:--------------------------------------------|
-| -a --deltaA       | 0 < ∆A ≤ 1.0          | Mixing parameter for allele frequencies     |
-| -b --burnin       | Positive integer      | Number of iterations to discard as burnin   |
-| -f --deltaF       | 0 < ∆F ≤ 1.0          | Mixing parameter for inbreeding coefﬁcients |
-| -g --genotypes    | None                  | Output genotypes and migrant ancestries     |
-| -i --iterations   | Positive integer      | Number of iterations for MCMC               |
-| -m --deltaM       | 0 < ∆M ≤ 1.0          | Mixing parameter for migration rates        |
-| -n --sampling     | Positive integer      | Interval between samples for MCMC           |
-| -o --output       | String                | Output file name                            |
-| -s --seed         | Positive integer      | Seed for random number generator            |
-| -p --nolikelihood | None                  | Fix likelihood to 1 and generate priors     |
-| -t --trace        | None                  | Create a trace ﬁle to monitor convergence   |
-| -u --settings     | None                  | Output options and parameter settings       |
-| -v --verbose      | None                  | Use verbose screen output                   |
-|                   | $0 < \Delta_A \leq 1$ |                                             |
+| Option            | Values                  | Effect                                      |
+|:------------------|:------------------------|:--------------------------------------------|
+| -a --deltaA       | $0 < \Delta_A \leq 1.0$ | Mixing parameter for allele frequencies     |
+| -b --burnin       | Positive integer        | Number of iterations to discard as burnin   |
+| -f --deltaF       | $0 < \Delta_F \leq 1.0$ | Mixing parameter for inbreeding coefﬁcients |
+| -g --genotypes    | None                    | Output genotypes and migrant ancestries     |
+| -i --iterations   | Positive integer        | Number of iterations for MCMC               |
+| -m --deltaM       | $0 < \Delta_M \leq 1.0$ | Mixing parameter for migration rates        |
+| -n --sampling     | Positive integer        | Interval between samples for MCMC           |
+| -o --output       | String                  | Output file name                            |
+| -s --seed         | Positive integer        | Seed for random number generator            |
+| -p --nolikelihood | None                    | Fix likelihood to 1 and generate priors     |
+| -t --trace        | None                    | Create a trace ﬁle to monitor convergence   |
+| -u --settings     | None                    | Output options and parameter settings       |
+| -v --verbose      | None                    | Use verbose screen output                   |
 
 **Table 1:** Options available for BA3 program
 
