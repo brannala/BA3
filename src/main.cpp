@@ -1332,7 +1332,10 @@ void checkDataSize(void)
 	{
 	  std::string regex_str = "\\s+"; 
 	  std::vector<std::string> list1 = split(aline, regex_str);
-	  alleleLabels[list1[2]].insert(list1[3]);
+	  /* bug fix Apr 4 2024 don't count missing data symbol "0" as an allele */
+ 	  if(list1[3]!="0")
+	    alleleLabels[list1[2]].insert(list1[3]);
+	  if(list1[4]!="0")
 	  alleleLabels[list1[2]].insert(list1[4]);
 	}
   for (auto all = alleleLabels.begin(); all != alleleLabels.end(); all++) {
