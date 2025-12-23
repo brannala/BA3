@@ -4,21 +4,30 @@ CFLAGS = -O3
 INCLFLAGS = -I/usr/local/include/
 IFLAGS =  -I include
 LIBFLAGS =  -L/usr/local/lib
-LDLIBS = -lgsl -lcblas
+LDLIBS = -lgsl -lgslcblas -lhts -lm
 CC=g++ -std=c++11
-all: BA3SNP BA3MSAT
-BA3SNP: mainSNP.o 
-	$(CC) $^ $(CFLAGS) $(LIBFLAGS) $(LDLIBS) -o BA3SNP
-mainSNP.o: main.cpp BA3.h
-	$(CC) $(CFLAGS) $(INCLFLAGS) $(IFLAGS) -DSNP -c $< -o mainSNP.o
-BA3MSAT: mainMSAT.o 
-	$(CC) $^ $(CFLAGS) $(LIBFLAGS) $(LDLIBS) -o BA3MSAT
-mainMSAT.o: main.cpp BA3.h
-	$(CC) $(CFLAGS) $(INCLFLAGS) $(IFLAGS) -DMSAT -c $< -o mainMSAT.o
+
+# Unified build - supports both SNP and microsatellite data
+all: BA3
+
+BA3: main.o
+	$(CC) $^ $(CFLAGS) $(LIBFLAGS) $(LDLIBS) -o BA3
+
+main.o: main.cpp BA3.h
+	$(CC) $(CFLAGS) $(INCLFLAGS) $(IFLAGS) -c $< -o main.o
+
 .Phony: clean
 clean:
-	$(RM) mainSNP.o mainMSAT.o
-	$(RM) BA3SNP BA3MSAT
+	$(RM) main.o
+	$(RM) BA3
+
 .Phony: tidy
 tidy:
-	$(RM) mainSNP.o mainMSAT.o
+	$(RM) main.o
+
+# Legacy targets for backward compatibility
+BA3SNP: BA3
+	cp BA3 BA3SNP
+
+BA3MSAT: BA3
+	cp BA3 BA3MSAT

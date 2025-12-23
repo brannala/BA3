@@ -20,9 +20,6 @@
     University of California Davis
 */
 
-// #define SNP  compiling for SNP data */
-// #define MSAT /* compiling for microsatellite data */ 
-
 #ifndef BA3_HEADERS
 #define BA3_HEADERS
 #include <iostream>
@@ -46,55 +43,97 @@
 #include <stdlib.h>
 #include <getopt.h>
 #include <cmath>
+#include <chrono>
 
 using namespace std;
 
-const string VERSION="3.0.5";
-const string RELEASEDATE="3/6/2023";
+const string VERSION="3.4.0";
+const string RELEASEDATE="12/23/2025";
 
-#ifdef SNP
-const int MAXLOCI=30000;
-const int MAXALLELE=4;
-const int MAXPOPLN=100;
-const int MAXINDIV=3000;
-const int MAXLINELENGTH=1000000;
-#endif
-
-#ifdef MSAT
-const int MAXLOCI=500;
+// Unified limits - supports both SNP and microsatellite data
+// Actual memory allocated dynamically based on dataset size
+const int MAXLOCI=100000;
 const int MAXALLELE=500;
 const int MAXPOPLN=100;
-const int MAXINDIV=5000;
+const int MAXINDIV=20000;
 const int MAXLINELENGTH=1000000;
-#endif
+
+// Use int16_t to support up to 500 alleles (values -2 to 499)
+typedef int16_t GenotypeType;
+
+// Global variables for actual dataset dimensions (set after reading data)
+extern unsigned int gNoLoci;
+extern unsigned int gNoIndiv;
+extern unsigned int gMaxAlleles;  // Maximum alleles across all loci
 
 struct indiv
 {
-	int genotype[MAXLOCI][2];
+	GenotypeType (*genotype)[2];  // Dynamically allocated: genotype[noLoci][2]
 	vector<int> missingGenotypes;
 	unsigned int samplePopln;
 	unsigned int migrantPopln;
 	unsigned int migrantAge;
 	double logL;
+
+	indiv() : genotype(nullptr), samplePopln(0), migrantPopln(0), migrantAge(0), logL(0.0) {}
 };
+
+// Memory allocation helpers
+void allocateGenotypes(indiv *individuals, unsigned int noIndiv, unsigned int noLoci);
+void freeGenotypes(indiv *individuals, unsigned int noIndiv);
 
 struct ancestryProbs
 {
 	double poplnPostProb[MAXPOPLN][3];
 };
 
+// Structure for Savage-Dickey density ratio test statistics
+struct SavageDickeyStats
+{
+	double kernelSum;      // Sum of kernel evaluations at zero
+	double sumM;           // Running sum of migration rates (for mean)
+	double sumM2;          // Running sum of squared migration rates (for variance)
+	long int countNearZero; // Count of samples where m < threshold
+	long int nSamples;     // Total number of samples
+};
+
 void printBanner(void);
-void checkDataSize(void);
+void checkDataSize(unsigned int &outNoIndiv, unsigned int &outNoLoci, unsigned int &outNoPopln, unsigned int &outMaxAlleles);
 void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLoci, unsigned int &noPopln, unsigned int *noAlleles);
 void getEmpiricalAlleleFreqs(double ***alleleFreqs, indiv *sampleIndiv, unsigned int *noAlleles, unsigned int noPopln, unsigned int noLoci, unsigned int noIndiv);
 void fillMigrantCounts(indiv *sampleIndiv, long int ***migrantCounts, unsigned int noIndiv, unsigned int noPopln);
 double migCountLogProb(long int ***migrantCounts, double **migrationRates, unsigned int noPopln);
-double logLik(indiv Indiv, double ***alleleFreqs, double *FStat, unsigned int noLoci);
-double oneLocusLogLik(indiv Indiv, double ***alleleFreqs, double *FStat, int chosenLocus);
+double logLik(const indiv& Indiv, double ***alleleFreqs, double ***logAlleleFreqs, double *FStat, double *log1MinusFStat, unsigned int noLoci);
+double oneLocusLogLik(const indiv& Indiv, double ***alleleFreqs, double ***logAlleleFreqs, double *FStat, double *log1MinusFStat, int chosenLocus);
+void updateLogAlleleFreqs(double ***logAlleleFreqs, double ***alleleFreqs, unsigned int popln, unsigned int locus, unsigned int noAlleles);
+void updateAllLogAlleleFreqs(double ***logAlleleFreqs, double ***alleleFreqs, unsigned int noPopln, unsigned int noLoci, unsigned int *noAlleles);
+void updateLogFStat(double *logFStat, double *log1MinusFStat, double *FStat, unsigned int noPopln);
 // void proposeMigrantAncDrop(int &migrantPopln, int &migrantAge, int samplePopln, int noPopln, long int ***migrantCounts);
 void proposeMigrantAncDrop(unsigned int &migrantPopln, unsigned int &migrantAge, unsigned int samplePopln, int noPopln, long int ***migrantCounts);
-void proposeMigrantAncAdd(unsigned int &migrantPopAdd, unsigned int &migrantAgeAdd,unsigned int migrantPopDrop, unsigned int migrantAgeDrop, 
+void proposeMigrantAncAdd(unsigned int &migrantPopAdd, unsigned int &migrantAgeAdd,unsigned int migrantPopDrop, unsigned int migrantAgeDrop,
 						  unsigned int samplePopln, int noPopln);
+int countNonEmptyAncestryCategories(long int ***migrantCounts, unsigned int samplePopln, unsigned int noPopln);
 
+// Savage-Dickey density ratio test functions
+void initSavageDickeyStats(SavageDickeyStats **sdStats, unsigned int noPopln);
+void updateSavageDickeyStats(SavageDickeyStats **sdStats, double **migrationRates,
+                              unsigned int noPopln, double bandwidth);
+void computeSavageDickeyBayesFactors(SavageDickeyStats **sdStats, unsigned int noPopln,
+                                      double priorDensityAtZero, std::ostream &out,
+                                      const std::vector<std::string> &poplnNames);
+void freeSavageDickeyStats(SavageDickeyStats **sdStats, unsigned int noPopln);
+
+// VCF input functions
+void readMetadataFile(const char *metaFileName,
+                      std::map<std::string, std::string> &indivToPopln);
+void readVCFFile(const char *vcfFileName,
+                 const std::map<std::string, std::string> &indivToPopln,
+                 indiv *sampleIndiv,
+                 unsigned int &noIndiv, unsigned int &noLoci,
+                 unsigned int &noPopln, unsigned int *noAlleles);
+void checkVCFDataSize(const char *vcfFileName,
+                      const std::map<std::string, std::string> &indivToPopln,
+                      unsigned int &outNoIndiv, unsigned int &outNoLoci,
+                      unsigned int &outNoPopln, unsigned int &outMaxAlleles);
 
 #endif
