@@ -15,10 +15,10 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgsl-dev libhts-dev libbz2-dev liblzma-dev zlib1g-dev libdeflate-dev
+          sudo apt-get install -y libgsl-dev libhts-dev
 
       - name: Build
-        run: make LDLIBS="-static -lgsl -lgslcblas -lhts -lhtscodecs -ldeflate -lz -lbz2 -llzma -lm -lpthread -ldl"
+        run: make
 
       - name: Create Linux archive
         run: |
