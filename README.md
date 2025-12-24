@@ -1,4 +1,4 @@
-<img src="doc/images/bayesass.png" width="300" alt="Bayes Ass" />
+<img src="doc/images/bayesass.png" width="400" alt="Bayes Ass" />
 
 # BA3
 
