@@ -1,3 +1,5 @@
+<img src="doc/images/bayesass.png" width="300" alt="Bayes Ass" />
+
 # BA3
 
 ## BayesAss edition 3
