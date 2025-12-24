@@ -1,1 +1,16 @@
 theme: jekyll-theme-leap-day
+
+# Binary distributions
+binaries:
+  - name: Linux x86_64
+    file: BA3-linux-x86_64.tar.gz
+    platform: linux
+    arch: x86_64
+  - name: Windows x86_64
+    file: BA3-windows-x86_64.zip
+    platform: windows
+    arch: x86_64
+  - name: macOS ARM64
+    file: BA3-macos-arm64.tar.gz
+    platform: macos
+    arch: arm64

@@ -77,6 +77,34 @@ jobs:
           name: windows-build
           path: BA3-${{ github.ref_name }}-windows-x86_64.zip
 
+  build-macos:
+    runs-on: macos-14  # ARM64 runner
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew install gsl htslib
+
+      - name: Build
+        run: make
+
+      - name: Create macOS archive
+        run: |
+          mkdir -p BA3-macos
+          cp BA3 BA3-macos/
+          cp README.md INSTALL LICENSE BA3-macos/
+          cp -r examples BA3-macos/
+          cp -r doc BA3-macos/
+          tar -czvf BA3-${{ github.ref_name }}-macos-arm64.tar.gz BA3-macos/
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: BA3-${{ github.ref_name }}-macos-arm64.tar.gz
+
   create-source:
     runs-on: ubuntu-latest
     steps:
@@ -102,7 +130,7 @@ jobs:
           path: BA3-*.tar.gz
 
   release:
-    needs: [build-linux, build-windows, create-source]
+    needs: [build-linux, build-windows, build-macos, create-source]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -121,6 +149,7 @@ jobs:
           files: |
             artifacts/linux-build/*
             artifacts/windows-build/*
+            artifacts/macos-build/*
             artifacts/source-archive/*
           draft: false
           prerelease: false
