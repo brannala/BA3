@@ -1,0 +1,392 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{bm}
+\usepackage[margin=1in]{geometry}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{hyperref}
+
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\mathrm{Var}}
+\newcommand{\KL}{\mathrm{KL}}
+\newcommand{\BF}{\mathrm{BF}}
+\newcommand{\data}{\mathcal{D}}
+
+\title{Implementation of the Savage-Dickey Density Ratio Test and\\Kullback-Leibler Divergence in BA3}
+\author{BA3 Technical Documentation}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document provides a detailed mathematical description of the Savage-Dickey density ratio test and Kullback-Leibler divergence statistics as implemented in BA3 (BayesAss Edition 3) for testing hypotheses about migration rates between populations. We describe the theoretical foundations, computational methods including kernel density estimation with boundary correction, and the interpretation of results.
+\end{abstract}
+
+\tableofcontents
+
+\section{Introduction}
+
+In population genetics, a fundamental question is whether migration occurs between populations. BA3 implements the Savage-Dickey density ratio test to formally test the hypothesis of zero migration between any pair of populations. Additionally, the Kullback-Leibler divergence provides a measure of information gain from prior to posterior, quantifying how much the data have informed our beliefs about migration rates.
+
+\section{Model Setup}
+
+\subsection{Migration Rate Parameters}
+
+Let $m_{ij}$ denote the per-generation migration rate from population $j$ to population $i$ (the proportion of individuals in population $i$ that are immigrants from population $j$). The BA3 model imposes the following constraints:
+
+\begin{align}
+m_{ii} &\geq \frac{2}{3} \quad \text{(most individuals are non-migrants)} \\
+\sum_{j \neq i} m_{ij} &\leq \frac{1}{3} \quad \text{(bounded total immigration)}
+\end{align}
+
+\subsection{Prior Distribution}
+
+The prior distribution for each off-diagonal migration rate $m_{ij}$ (where $i \neq j$) is uniform on the interval $[0, \frac{1}{3}]$:
+\begin{equation}
+m_{ij} \sim \text{Uniform}\left(0, \frac{1}{3}\right), \quad i \neq j
+\end{equation}
+
+The prior density function is therefore:
+\begin{equation}
+\pi(m_{ij}) =
+\begin{cases}
+3 & \text{if } 0 \leq m_{ij} \leq \frac{1}{3} \\
+0 & \text{otherwise}
+\end{cases}
+\end{equation}
+
+In particular, the prior density at zero is:
+\begin{equation}
+\pi(m_{ij} = 0) = 3
+\end{equation}
+
+The prior standard deviation of a Uniform$(0, \frac{1}{3})$ distribution is:
+\begin{equation}
+\sigma_{\text{prior}} = \frac{1/3}{\sqrt{12}} = \frac{1}{3\sqrt{12}} \approx 0.0962
+\end{equation}
+
+\section{The Savage-Dickey Density Ratio Test}
+
+\subsection{Theoretical Foundation}
+
+The Savage-Dickey density ratio (Dickey, 1971; Verdinelli \& Wasserman, 1995) provides a method for computing Bayes factors when testing a point null hypothesis that is a special case of a more general alternative.
+
+\subsubsection{Hypothesis Framework}
+
+We test:
+\begin{align}
+H_0&: m_{ij} = 0 \quad \text{(no migration from population } j \text{ to } i\text{)} \\
+H_1&: m_{ij} > 0 \quad \text{(migration exists)}
+\end{align}
+
+\subsubsection{Bayes Factor Definition}
+
+The Bayes factor in favor of the null hypothesis $H_0$ over the alternative $H_1$ is:
+\begin{equation}
+\BF_{01} = \frac{P(\data \mid H_0)}{P(\data \mid H_1)}
+\end{equation}
+
+where $\data$ denotes the observed genotype data.
+
+\subsubsection{Savage-Dickey Identity}
+
+The key insight of the Savage-Dickey method is that when $H_0$ specifies a point value $\theta_0$ that lies within the parameter space of $H_1$, the Bayes factor simplifies to:
+\begin{equation}
+\BF_{01} = \frac{\pi(\theta_0 \mid \data)}{\pi(\theta_0)}
+\label{eq:savage-dickey}
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $\pi(\theta_0 \mid \data)$ is the \emph{posterior} density evaluated at the point null value $\theta_0$
+    \item $\pi(\theta_0)$ is the \emph{prior} density evaluated at the same point
+\end{itemize}
+
+For our migration rate test with $\theta_0 = 0$:
+\begin{equation}
+\boxed{\BF_{01} = \frac{p(m_{ij} = 0 \mid \data)}{p(m_{ij} = 0)} = \frac{p(m_{ij} = 0 \mid \data)}{3}}
+\end{equation}
+
+\subsection{Interpretation of Bayes Factors}
+
+Following the Jeffreys scale (Jeffreys, 1961), we interpret Bayes factors as shown in Table~\ref{tab:jeffreys}.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+$\log_{10}(\BF_{01})$ & $\BF_{01}$ & Evidence \\
+\midrule
+$> 2$ & $> 100$ & Decisive for $H_0$ (no migration) \\
+$1$ to $2$ & $10$ to $100$ & Strong for $H_0$ \\
+$0.5$ to $1$ & $3.2$ to $10$ & Substantial for $H_0$ \\
+$0$ to $0.5$ & $1$ to $3.2$ & Weak for $H_0$ \\
+$-0.5$ to $0$ & $0.32$ to $1$ & Weak for $H_1$ (migration exists) \\
+$-1$ to $-0.5$ & $0.1$ to $0.32$ & Substantial for $H_1$ \\
+$-2$ to $-1$ & $0.01$ to $0.1$ & Strong for $H_1$ \\
+$< -2$ & $< 0.01$ & Decisive for $H_1$ \\
+\bottomrule
+\end{tabular}
+\caption{Jeffreys scale for interpreting Bayes factors}
+\label{tab:jeffreys}
+\end{table}
+
+\section{Posterior Density Estimation}
+
+\subsection{Kernel Density Estimation}
+
+Since we have MCMC samples $\{m_{ij}^{(1)}, m_{ij}^{(2)}, \ldots, m_{ij}^{(N)}\}$ from the posterior distribution, we estimate the posterior density using kernel density estimation (KDE).
+
+For a standard kernel density estimator:
+\begin{equation}
+\hat{p}(x) = \frac{1}{Nh} \sum_{t=1}^{N} K\left(\frac{x - m_{ij}^{(t)}}{h}\right)
+\end{equation}
+
+where $K(\cdot)$ is the kernel function and $h$ is the bandwidth.
+
+\subsection{Gaussian Kernel}
+
+BA3 uses a Gaussian kernel:
+\begin{equation}
+K(u) = \frac{1}{\sqrt{2\pi}} \exp\left(-\frac{u^2}{2}\right)
+\end{equation}
+
+The unnormalized form used in the implementation accumulates:
+\begin{equation}
+K_h(m) = \exp\left(-\frac{m^2}{2h^2}\right)
+\end{equation}
+
+\subsection{Boundary Correction via Reflection}
+
+Since migration rates are bounded below by zero ($m_{ij} \geq 0$), standard KDE would underestimate the density near the boundary. BA3 uses the \emph{reflection method} (Silverman, 1986) to correct for this boundary effect.
+
+The reflection method conceptually ``reflects'' each data point about the boundary, effectively doubling the contribution to the density estimate at the boundary. For estimation at $x = 0$:
+\begin{equation}
+\hat{p}(0 \mid \data) = \frac{2}{Nh\sqrt{2\pi}} \sum_{t=1}^{N} \exp\left(-\frac{(m_{ij}^{(t)})^2}{2h^2}\right)
+\end{equation}
+
+The factor of 2 accounts for the reflection.
+
+\subsection{Bandwidth Selection}
+
+BA3 uses two bandwidth values:
+
+\subsubsection{Reference Bandwidth}
+During MCMC sampling, a fixed reference bandwidth is used for accumulating kernel sums:
+\begin{equation}
+h_{\text{ref}} = 0.02
+\end{equation}
+
+\subsubsection{Silverman's Rule of Thumb}
+For final density estimation, the optimal bandwidth is computed using Silverman's rule:
+\begin{equation}
+h_{\text{opt}} = 1.06 \cdot \hat{\sigma} \cdot N^{-1/5}
+\end{equation}
+
+where $\hat{\sigma}$ is the sample standard deviation of the posterior samples:
+\begin{equation}
+\hat{\sigma} = \sqrt{\frac{1}{N}\sum_{t=1}^{N}(m_{ij}^{(t)})^2 - \left(\frac{1}{N}\sum_{t=1}^{N}m_{ij}^{(t)}\right)^2}
+\end{equation}
+
+A minimum bandwidth of $h_{\min} = 0.01$ is enforced to prevent numerical instability.
+
+\subsection{Histogram-Based Fallback}
+
+As a sanity check, BA3 also computes a histogram-based density estimate:
+\begin{equation}
+\hat{p}_{\text{hist}}(0 \mid \data) = \frac{n_{\text{near zero}}}{N \cdot \epsilon}
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $n_{\text{near zero}}$ is the count of samples with $m_{ij} < \epsilon$
+    \item $\epsilon = 0.005$ is the threshold for ``near zero''
+\end{itemize}
+
+If the KDE estimate differs from the histogram estimate by more than a factor of 100, the histogram estimate is used as a fallback.
+
+\subsection{Complete Posterior Density Estimate}
+
+The final posterior density at zero is:
+\begin{equation}
+\boxed{\hat{p}(0 \mid \data) = \frac{2}{Nh_{\text{opt}}\sqrt{2\pi}} \sum_{t=1}^{N} \exp\left(-\frac{(m_{ij}^{(t)})^2}{2h_{\text{ref}}^2}\right)}
+\end{equation}
+
+Note: The implementation accumulates kernel values using $h_{\text{ref}}$ during MCMC but applies normalization using $h_{\text{opt}}$ at the end.
+
+\section{Kullback-Leibler Divergence}
+
+\subsection{Definition}
+
+The Kullback-Leibler (KL) divergence measures the information gained when updating from the prior distribution to the posterior distribution:
+\begin{equation}
+\KL(p_{\text{post}} \| p_{\text{prior}}) = \int p(m_{ij} \mid \data) \log \frac{p(m_{ij} \mid \data)}{p(m_{ij})} \, dm_{ij}
+\end{equation}
+
+This quantity is also known as the \emph{information gain} or \emph{relative entropy}.
+
+\subsection{Gaussian Approximation}
+
+Exact computation of the KL divergence requires knowledge of the full posterior distribution. BA3 uses a Gaussian approximation to obtain a tractable estimate.
+
+\subsubsection{Approximating Distributions}
+
+We approximate:
+\begin{align}
+p(m_{ij}) &\approx \mathcal{N}(\mu_{\text{prior}}, \sigma_{\text{prior}}^2) \\
+p(m_{ij} \mid \data) &\approx \mathcal{N}(\hat{\mu}, \hat{\sigma}^2)
+\end{align}
+
+where:
+\begin{itemize}
+    \item $\sigma_{\text{prior}} = \frac{1}{3\sqrt{12}} \approx 0.0962$ (from Uniform$(0, \frac{1}{3})$)
+    \item $\hat{\mu} = \frac{1}{N}\sum_{t=1}^{N} m_{ij}^{(t)}$ (posterior sample mean)
+    \item $\hat{\sigma}^2 = \frac{1}{N}\sum_{t=1}^{N} (m_{ij}^{(t)})^2 - \hat{\mu}^2$ (posterior sample variance)
+\end{itemize}
+
+\subsubsection{KL Divergence Between Gaussians}
+
+For two univariate Gaussian distributions $P = \mathcal{N}(\mu_P, \sigma_P^2)$ and $Q = \mathcal{N}(\mu_Q, \sigma_Q^2)$, the KL divergence is:
+\begin{equation}
+\KL(P \| Q) = \log\frac{\sigma_Q}{\sigma_P} + \frac{\sigma_P^2 + (\mu_P - \mu_Q)^2}{2\sigma_Q^2} - \frac{1}{2}
+\end{equation}
+
+\subsubsection{Simplified Approximation in BA3}
+
+BA3 uses a simplified approximation focusing on the variance ratio, which captures the precision gain:
+\begin{equation}
+\KL(\text{posterior} \| \text{prior}) \approx \log\left(\frac{\sigma_{\text{prior}}}{\hat{\sigma}}\right)
+\end{equation}
+
+This approximation is valid when:
+\begin{enumerate}
+    \item The posterior mean is close to the prior mean
+    \item The variance reduction dominates the KL divergence
+\end{enumerate}
+
+\subsection{Conversion to Bits}
+
+The KL divergence is reported in bits (base-2 logarithm) rather than nats (natural logarithm):
+\begin{equation}
+\KL_{\text{bits}} = \log_2\left(\frac{\sigma_{\text{prior}}}{\hat{\sigma}}\right) = \frac{1}{\ln 2} \ln\left(\frac{\sigma_{\text{prior}}}{\hat{\sigma}}\right)
+\end{equation}
+
+where $\frac{1}{\ln 2} = \log_2 e \approx 1.4427$.
+
+\subsection{Bounds}
+
+The KL divergence is non-negative by definition. If the computed value is negative (which can occur due to the approximation when the posterior is more dispersed than the prior), BA3 sets:
+\begin{equation}
+\KL_{\text{bits}} = \max\left(0, \log_2\left(\frac{\sigma_{\text{prior}}}{\hat{\sigma}}\right)\right)
+\end{equation}
+
+\subsection{Interpretation}
+
+The KL divergence in bits can be interpreted as:
+\begin{itemize}
+    \item \textbf{0 bits}: No information gained; posterior equals prior
+    \item \textbf{1 bit}: Posterior uncertainty is halved relative to prior
+    \item \textbf{2 bits}: Posterior uncertainty is quartered relative to prior
+    \item \textbf{Large values}: Strong information gain; data are highly informative
+\end{itemize}
+
+\section{Algorithm Summary}
+
+\begin{algorithm}[H]
+\caption{Savage-Dickey Test and KL Divergence Computation}
+\begin{algorithmic}[1]
+\State \textbf{Initialize:} $\text{kernelSum} \gets 0$, $\text{sumM} \gets 0$, $\text{sumM2} \gets 0$, $n_{\text{near}} \gets 0$, $N \gets 0$
+\State \textbf{Set constants:} $h_{\text{ref}} \gets 0.02$, $\epsilon \gets 0.005$, $\pi(0) \gets 3$
+\For{each MCMC sample $m$ (post burn-in)}
+    \State $\text{sumM} \gets \text{sumM} + m$
+    \State $\text{sumM2} \gets \text{sumM2} + m^2$
+    \State $\text{kernelSum} \gets \text{kernelSum} + \exp\left(-\frac{m^2}{2h_{\text{ref}}^2}\right)$
+    \If{$m < \epsilon$}
+        \State $n_{\text{near}} \gets n_{\text{near}} + 1$
+    \EndIf
+    \State $N \gets N + 1$
+\EndFor
+\State $\hat{\mu} \gets \text{sumM} / N$
+\State $\hat{\sigma} \gets \sqrt{\text{sumM2}/N - \hat{\mu}^2}$
+\State $h_{\text{opt}} \gets \max(0.01, 1.06 \cdot \hat{\sigma} \cdot N^{-0.2})$
+\State $\hat{p}(0|\data) \gets \frac{2 \cdot \text{kernelSum}}{N \cdot h_{\text{opt}} \cdot \sqrt{2\pi}}$
+\State $\hat{p}_{\text{hist}} \gets n_{\text{near}} / (N \cdot \epsilon)$
+\If{$\hat{p}(0|\data) < 0.01 \cdot \hat{p}_{\text{hist}}$ \textbf{or} $\hat{p}(0|\data) > 100 \cdot \hat{p}_{\text{hist}}$}
+    \State $\hat{p}(0|\data) \gets \hat{p}_{\text{hist}}$ \Comment{Fallback to histogram}
+\EndIf
+\State $\BF_{01} \gets \hat{p}(0|\data) / \pi(0)$
+\State $\sigma_{\text{prior}} \gets 1/(3\sqrt{12})$
+\State $\KL_{\text{bits}} \gets \max\left(0, \log_2(\sigma_{\text{prior}}/\hat{\sigma})\right)$
+\State \Return $\BF_{01}$, $\log_{10}(\BF_{01})$, $\KL_{\text{bits}}$
+\end{algorithmic}
+\end{algorithm}
+
+\section{Implementation Details}
+
+\subsection{Data Structure}
+
+The statistics are accumulated in the \texttt{SavageDickeyStats} structure:
+\begin{verbatim}
+struct SavageDickeyStats {
+    double kernelSum;       // Sum of kernel evaluations
+    double sumM;            // Running sum of m (for mean)
+    double sumM2;           // Running sum of m^2 (for variance)
+    long int countNearZero; // Count where m < 0.005
+    long int nSamples;      // Total sample count
+};
+\end{verbatim}
+
+\subsection{Online Computation}
+
+Statistics are updated incrementally during MCMC sampling using Welford-style online algorithms, avoiding the need to store all samples:
+\begin{align}
+\bar{m}_N &= \frac{1}{N}\sum_{t=1}^{N} m^{(t)} = \frac{\text{sumM}}{N} \\
+\hat{\sigma}^2_N &= \frac{\text{sumM2}}{N} - \left(\frac{\text{sumM}}{N}\right)^2
+\end{align}
+
+\section{Limitations and Considerations}
+
+\subsection{Bandwidth Sensitivity}
+
+The Savage-Dickey test relies on accurate density estimation at a single point (zero). This estimate is sensitive to:
+\begin{itemize}
+    \item Bandwidth selection
+    \item Number of MCMC samples
+    \item Posterior concentration near the boundary
+\end{itemize}
+
+\subsection{Boundary Effects}
+
+The reflection method assumes the density is symmetric about the boundary, which may not hold for all posteriors. When the posterior mass is concentrated away from zero, this has minimal impact.
+
+\subsection{KL Approximation}
+
+The Gaussian approximation for KL divergence may be inaccurate when:
+\begin{itemize}
+    \item The posterior is multimodal
+    \item The posterior is highly skewed
+    \item The posterior has heavy tails
+\end{itemize}
+
+For migration rates bounded on $[0, \frac{1}{3}]$, truncation effects may cause the approximation to underestimate the true KL divergence.
+
+\section{References}
+
+\begin{enumerate}
+    \item Dickey, J.M. (1971). The weighted likelihood ratio, linear hypotheses on normal location parameters. \emph{Annals of Mathematical Statistics}, 42, 204--223.
+
+    \item Jeffreys, H. (1961). \emph{Theory of Probability} (3rd ed.). Oxford University Press.
+
+    \item Silverman, B.W. (1986). \emph{Density Estimation for Statistics and Data Analysis}. Chapman \& Hall.
+
+    \item Verdinelli, I. \& Wasserman, L. (1995). Computing Bayes factors using a generalization of the Savage-Dickey density ratio. \emph{Journal of the American Statistical Association}, 90, 614--618.
+
+    \item Wagenmakers, E.J., Lodewyckx, T., Kuriyal, H., \& Grasman, R. (2010). Bayesian hypothesis testing for psychologists: A tutorial on the Savage-Dickey method. \emph{Cognitive Psychology}, 60, 158--189.
+\end{enumerate}
+
+\end{document}
