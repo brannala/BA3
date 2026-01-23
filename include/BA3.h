@@ -47,8 +47,8 @@
 
 using namespace std;
 
-const string VERSION="3.4.0";
-const string RELEASEDATE="12/23/2025";
+const string VERSION="3.4.3";
+const string RELEASEDATE="01/22/2026";
 
 // Unified limits - supports both SNP and microsatellite data
 // Actual memory allocated dynamically based on dataset size
