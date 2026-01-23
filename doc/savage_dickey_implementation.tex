@@ -230,70 +230,94 @@ The Kullback-Leibler (KL) divergence measures the information gained when updati
 
 This quantity is also known as the \emph{information gain} or \emph{relative entropy}.
 
-\subsection{Gaussian Approximation}
+\subsection{Hybrid Analytical-Numerical Approach}
 
-Exact computation of the KL divergence requires knowledge of the full posterior distribution. BA3 uses a Gaussian approximation to obtain a tractable estimate.
+A Gaussian approximation for KL divergence is inappropriate here because:
+\begin{enumerate}
+    \item The prior is Uniform$(0, \frac{1}{3})$ with bounded support, not Gaussian
+    \item The posterior is also bounded on $[0, \frac{1}{3}]$
+    \item Posteriors for migration rates are often highly skewed toward zero
+\end{enumerate}
 
-\subsubsection{Approximating Distributions}
+Instead, BA3 uses the \textbf{exact analytical prior density} combined with \textbf{kernel density estimation} for the posterior.
 
-We approximate:
+\subsubsection{Analytical Prior}
+
+The prior density for off-diagonal migration rates is:
+\begin{equation}
+p(m_{ij}) =
+\begin{cases}
+3 & \text{if } m_{ij} \in [0, \frac{1}{3}] \\
+0 & \text{otherwise}
+\end{cases}
+\end{equation}
+
+\subsubsection{KDE for Posterior}
+
+The posterior density is estimated using kernel density estimation with a Gaussian kernel and reflection boundary correction (as described in Section 4):
+\begin{equation}
+\hat{p}(m \mid \data) = \frac{1}{Nh} \sum_{t=1}^{N} \left[ K\left(\frac{m - m^{(t)}}{h}\right) + K\left(\frac{m + m^{(t)}}{h}\right) \right]
+\end{equation}
+
+where $K(u) = \frac{1}{\sqrt{2\pi}} e^{-u^2/2}$ is the Gaussian kernel and the second term provides reflection at the boundary $m = 0$.
+
+\subsubsection{Simplification with Uniform Prior}
+
+Substituting the uniform prior into the KL divergence:
 \begin{align}
-p(m_{ij}) &\approx \mathcal{N}(\mu_{\text{prior}}, \sigma_{\text{prior}}^2) \\
-p(m_{ij} \mid \data) &\approx \mathcal{N}(\hat{\mu}, \hat{\sigma}^2)
+\KL(\text{post} \| \text{prior}) &= \int_0^{1/3} \hat{p}(m \mid \data) \log \frac{\hat{p}(m \mid \data)}{3} \, dm \\
+&= \int_0^{1/3} \hat{p}(m \mid \data) \log \hat{p}(m \mid \data) \, dm - \int_0^{1/3} \hat{p}(m \mid \data) \log 3 \, dm \\
+&= \int_0^{1/3} \hat{p}(m \mid \data) \log \hat{p}(m \mid \data) \, dm - \log 3
 \end{align}
+
+Since the posterior integrates to 1 over its support. Recognizing that the first term is the negative differential entropy:
+\begin{equation}
+\boxed{\KL(\text{post} \| \text{prior}) = -H(\text{posterior}) - \log 3}
+\end{equation}
+
+where
+\begin{equation}
+H(\text{posterior}) = -\int_0^{1/3} \hat{p}(m \mid \data) \log \hat{p}(m \mid \data) \, dm
+\end{equation}
+
+\subsection{Numerical Integration}
+
+The integral is computed numerically using the trapezoidal rule over a fine grid on $[0, \frac{1}{3}]$:
+\begin{equation}
+\KL \approx \sum_{i=0}^{G-1} \hat{p}(m_i \mid \data) \log \frac{\hat{p}(m_i \mid \data)}{3} \cdot \Delta m
+\end{equation}
 
 where:
 \begin{itemize}
-    \item $\sigma_{\text{prior}} = \frac{1}{3\sqrt{12}} \approx 0.0962$ (from Uniform$(0, \frac{1}{3})$)
-    \item $\hat{\mu} = \frac{1}{N}\sum_{t=1}^{N} m_{ij}^{(t)}$ (posterior sample mean)
-    \item $\hat{\sigma}^2 = \frac{1}{N}\sum_{t=1}^{N} (m_{ij}^{(t)})^2 - \hat{\mu}^2$ (posterior sample variance)
+    \item $G$ is the number of grid points (default: 1000)
+    \item $\Delta m = \frac{1}{3G}$ is the grid spacing
+    \item $m_i = i \cdot \Delta m$ for $i = 0, 1, \ldots, G-1$
 \end{itemize}
 
-\subsubsection{KL Divergence Between Gaussians}
+\subsubsection{Handling Zero Density}
 
-For two univariate Gaussian distributions $P = \mathcal{N}(\mu_P, \sigma_P^2)$ and $Q = \mathcal{N}(\mu_Q, \sigma_Q^2)$, the KL divergence is:
-\begin{equation}
-\KL(P \| Q) = \log\frac{\sigma_Q}{\sigma_P} + \frac{\sigma_P^2 + (\mu_P - \mu_Q)^2}{2\sigma_Q^2} - \frac{1}{2}
-\end{equation}
-
-\subsubsection{Simplified Approximation in BA3}
-
-BA3 uses a simplified approximation focusing on the variance ratio, which captures the precision gain:
-\begin{equation}
-\KL(\text{posterior} \| \text{prior}) \approx \log\left(\frac{\sigma_{\text{prior}}}{\hat{\sigma}}\right)
-\end{equation}
-
-This approximation is valid when:
-\begin{enumerate}
-    \item The posterior mean is close to the prior mean
-    \item The variance reduction dominates the KL divergence
-\end{enumerate}
+When $\hat{p}(m_i \mid \data) = 0$, the integrand $p \log p$ is defined as 0 (by continuity, since $\lim_{p \to 0^+} p \log p = 0$). In practice, we skip grid points where the density falls below a small threshold $\epsilon_{\text{floor}} = 10^{-10}$.
 
 \subsection{Conversion to Bits}
 
-The KL divergence is reported in bits (base-2 logarithm) rather than nats (natural logarithm):
+The KL divergence is reported in bits (base-2 logarithm) rather than nats:
 \begin{equation}
-\KL_{\text{bits}} = \log_2\left(\frac{\sigma_{\text{prior}}}{\hat{\sigma}}\right) = \frac{1}{\ln 2} \ln\left(\frac{\sigma_{\text{prior}}}{\hat{\sigma}}\right)
+\KL_{\text{bits}} = \frac{\KL_{\text{nats}}}{\ln 2} = \KL_{\text{nats}} \cdot \log_2 e
 \end{equation}
 
-where $\frac{1}{\ln 2} = \log_2 e \approx 1.4427$.
-
-\subsection{Bounds}
-
-The KL divergence is non-negative by definition. If the computed value is negative (which can occur due to the approximation when the posterior is more dispersed than the prior), BA3 sets:
-\begin{equation}
-\KL_{\text{bits}} = \max\left(0, \log_2\left(\frac{\sigma_{\text{prior}}}{\hat{\sigma}}\right)\right)
-\end{equation}
+where $\log_2 e \approx 1.4427$.
 
 \subsection{Interpretation}
 
-The KL divergence in bits can be interpreted as:
+The KL divergence in bits can be interpreted as the expected number of additional bits needed to encode samples from the posterior using a code optimized for the prior:
 \begin{itemize}
     \item \textbf{0 bits}: No information gained; posterior equals prior
-    \item \textbf{1 bit}: Posterior uncertainty is halved relative to prior
-    \item \textbf{2 bits}: Posterior uncertainty is quartered relative to prior
-    \item \textbf{Large values}: Strong information gain; data are highly informative
+    \item \textbf{1 bit}: Data provide moderate information about migration rate
+    \item \textbf{2+ bits}: Data are highly informative; posterior is much more concentrated than prior
+    \item \textbf{Large values}: Strong evidence that migration rate is constrained to a narrow range
 \end{itemize}
+
+Note that the maximum possible KL divergence for a uniform prior on $[0, \frac{1}{3}]$ is unbounded above (approached as the posterior concentrates to a point mass).
 
 \section{Algorithm Summary}
 
@@ -301,11 +325,13 @@ The KL divergence in bits can be interpreted as:
 \caption{Savage-Dickey Test and KL Divergence Computation}
 \begin{algorithmic}[1]
 \State \textbf{Initialize:} $\text{kernelSum} \gets 0$, $\text{sumM} \gets 0$, $\text{sumM2} \gets 0$, $n_{\text{near}} \gets 0$, $N \gets 0$
-\State \textbf{Set constants:} $h_{\text{ref}} \gets 0.02$, $\epsilon \gets 0.005$, $\pi(0) \gets 3$
+\State \textbf{Set constants:} $h_{\text{ref}} \gets 0.02$, $\epsilon \gets 0.005$, $\pi(0) \gets 3$, $G \gets 1000$
+\State \textbf{Initialize sample storage:} samples $\gets$ empty list
 \For{each MCMC sample $m$ (post burn-in)}
     \State $\text{sumM} \gets \text{sumM} + m$
     \State $\text{sumM2} \gets \text{sumM2} + m^2$
     \State $\text{kernelSum} \gets \text{kernelSum} + \exp\left(-\frac{m^2}{2h_{\text{ref}}^2}\right)$
+    \State Append $m$ to samples
     \If{$m < \epsilon$}
         \State $n_{\text{near}} \gets n_{\text{near}} + 1$
     \EndIf
@@ -314,14 +340,24 @@ The KL divergence in bits can be interpreted as:
 \State $\hat{\mu} \gets \text{sumM} / N$
 \State $\hat{\sigma} \gets \sqrt{\text{sumM2}/N - \hat{\mu}^2}$
 \State $h_{\text{opt}} \gets \max(0.01, 1.06 \cdot \hat{\sigma} \cdot N^{-0.2})$
+\State \Comment{Savage-Dickey Bayes Factor}
 \State $\hat{p}(0|\data) \gets \frac{2 \cdot \text{kernelSum}}{N \cdot h_{\text{opt}} \cdot \sqrt{2\pi}}$
 \State $\hat{p}_{\text{hist}} \gets n_{\text{near}} / (N \cdot \epsilon)$
 \If{$\hat{p}(0|\data) < 0.01 \cdot \hat{p}_{\text{hist}}$ \textbf{or} $\hat{p}(0|\data) > 100 \cdot \hat{p}_{\text{hist}}$}
     \State $\hat{p}(0|\data) \gets \hat{p}_{\text{hist}}$ \Comment{Fallback to histogram}
 \EndIf
 \State $\BF_{01} \gets \hat{p}(0|\data) / \pi(0)$
-\State $\sigma_{\text{prior}} \gets 1/(3\sqrt{12})$
-\State $\KL_{\text{bits}} \gets \max\left(0, \log_2(\sigma_{\text{prior}}/\hat{\sigma})\right)$
+\State \Comment{KL Divergence via Numerical Integration}
+\State $\Delta m \gets \frac{1}{3G}$
+\State $\KL \gets 0$
+\For{$i = 0$ to $G-1$}
+    \State $m_i \gets i \cdot \Delta m$
+    \State $\hat{p}_i \gets \frac{1}{Nh_{\text{opt}}} \sum_{t=1}^{N} \left[ K\left(\frac{m_i - \text{samples}[t]}{h_{\text{opt}}}\right) + K\left(\frac{m_i + \text{samples}[t]}{h_{\text{opt}}}\right) \right]$
+    \If{$\hat{p}_i > 10^{-10}$}
+        \State $\KL \gets \KL + \hat{p}_i \cdot \log(\hat{p}_i / 3) \cdot \Delta m$
+    \EndIf
+\EndFor
+\State $\KL_{\text{bits}} \gets \KL \cdot \log_2 e$
 \State \Return $\BF_{01}$, $\log_{10}(\BF_{01})$, $\KL_{\text{bits}}$
 \end{algorithmic}
 \end{algorithm}
@@ -333,21 +369,24 @@ The KL divergence in bits can be interpreted as:
 The statistics are accumulated in the \texttt{SavageDickeyStats} structure:
 \begin{verbatim}
 struct SavageDickeyStats {
-    double kernelSum;       // Sum of kernel evaluations
-    double sumM;            // Running sum of m (for mean)
-    double sumM2;           // Running sum of m^2 (for variance)
-    long int countNearZero; // Count where m < 0.005
-    long int nSamples;      // Total sample count
+    double kernelSum;           // Sum of kernel evaluations at zero
+    double sumM;                // Running sum of m (for mean)
+    double sumM2;               // Running sum of m^2 (for variance)
+    long int countNearZero;     // Count where m < 0.005
+    long int nSamples;          // Total sample count
+    std::vector<double> samples; // Stored samples for KL computation
 };
 \end{verbatim}
 
-\subsection{Online Computation}
+\subsection{Online vs.\ Stored Computation}
 
-Statistics are updated incrementally during MCMC sampling using Welford-style online algorithms, avoiding the need to store all samples:
+For the Savage-Dickey test, statistics are updated incrementally using Welford-style online algorithms:
 \begin{align}
 \bar{m}_N &= \frac{1}{N}\sum_{t=1}^{N} m^{(t)} = \frac{\text{sumM}}{N} \\
 \hat{\sigma}^2_N &= \frac{\text{sumM2}}{N} - \left(\frac{\text{sumM}}{N}\right)^2
 \end{align}
+
+For the KL divergence, samples must be stored to evaluate the KDE at arbitrary grid points during numerical integration. The memory requirement is $O(N \cdot P^2)$ where $N$ is the number of post-burn-in samples and $P$ is the number of populations. For typical analyses ($N \approx 2500$ samples, $P \leq 10$ populations), this requires approximately 2 MB of storage.
 
 \section{Limitations and Considerations}
 
@@ -364,25 +403,27 @@ The Savage-Dickey test relies on accurate density estimation at a single point (
 
 The reflection method assumes the density is symmetric about the boundary, which may not hold for all posteriors. When the posterior mass is concentrated away from zero, this has minimal impact.
 
-\subsection{KL Approximation}
+\subsection{KL Divergence Numerical Integration}
 
-The Gaussian approximation for KL divergence may be inaccurate when:
+The numerical integration for KL divergence depends on:
 \begin{itemize}
-    \item The posterior is multimodal
-    \item The posterior is highly skewed
-    \item The posterior has heavy tails
+    \item \textbf{Grid resolution}: Finer grids improve accuracy but increase computation time. The default of 1000 grid points provides a good balance.
+    \item \textbf{KDE accuracy}: The quality of the posterior density estimate affects the KL divergence. Sufficient MCMC samples (typically $>$1000) are needed.
+    \item \textbf{Density floor}: Very small density values can cause numerical instability in $\log(\hat{p})$. Values below $10^{-10}$ are treated as zero.
 \end{itemize}
 
-For migration rates bounded on $[0, \frac{1}{3}]$, truncation effects may cause the approximation to underestimate the true KL divergence.
+The hybrid approach using the exact uniform prior avoids the Gaussian approximation errors that would occur with bounded, skewed posteriors.
 
 \section{References}
 
 \begin{enumerate}
+    \item Cover, T.M. \& Thomas, J.A. (2006). \emph{Elements of Information Theory} (2nd ed.). Wiley-Interscience. [KL divergence and differential entropy]
+
     \item Dickey, J.M. (1971). The weighted likelihood ratio, linear hypotheses on normal location parameters. \emph{Annals of Mathematical Statistics}, 42, 204--223.
 
     \item Jeffreys, H. (1961). \emph{Theory of Probability} (3rd ed.). Oxford University Press.
 
-    \item Silverman, B.W. (1986). \emph{Density Estimation for Statistics and Data Analysis}. Chapman \& Hall.
+    \item Silverman, B.W. (1986). \emph{Density Estimation for Statistics and Data Analysis}. Chapman \& Hall. [KDE and boundary correction]
 
     \item Verdinelli, I. \& Wasserman, L. (1995). Computing Bayes factors using a generalization of the Savage-Dickey density ratio. \emph{Journal of the American Statistical Association}, 90, 614--618.
 

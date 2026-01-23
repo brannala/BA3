@@ -2892,6 +2892,9 @@ void updateSavageDickeyStats(SavageDickeyStats **sdStats, double **migrationRate
 			sdStats[i][j].sumM2 += m * m;
 			sdStats[i][j].nSamples++;
 
+			// Store sample for KL divergence computation
+			sdStats[i][j].samples.push_back(m);
+
 			// Update count near zero
 			if (m < SD_NEAR_ZERO_THRESHOLD) {
 				sdStats[i][j].countNearZero++;
@@ -2905,6 +2908,58 @@ void updateSavageDickeyStats(SavageDickeyStats **sdStats, double **migrationRate
 	}
 }
 
+// Compute KDE with reflection at boundary for a single point
+// Uses Gaussian kernel with reflection method for boundary correction at m=0
+double computeKDEatPoint(double x, const std::vector<double> &samples, double bandwidth)
+{
+	const double PI = 3.14159265358979323846;
+	const double SQRT_2PI = sqrt(2.0 * PI);
+	long int N = samples.size();
+	double h = bandwidth;
+	double density = 0.0;
+
+	for (long int t = 0; t < N; t++) {
+		double m = samples[t];
+		// Standard kernel contribution
+		double u1 = (x - m) / h;
+		density += exp(-0.5 * u1 * u1);
+		// Reflection contribution (for boundary at 0)
+		double u2 = (x + m) / h;
+		density += exp(-0.5 * u2 * u2);
+	}
+
+	return density / (N * h * SQRT_2PI);
+}
+
+// Compute KL divergence using numerical integration with KDE posterior and uniform prior
+// KL(posterior || prior) = integral of p(m|D) * log(p(m|D) / 3) dm over [0, 1/3]
+double computeKLDivergence(const std::vector<double> &samples, double bandwidth)
+{
+	const int N_GRID = 1000;  // Number of grid points
+	const double UPPER_BOUND = 1.0 / 3.0;  // Upper limit of support
+	const double PRIOR_DENSITY = 3.0;  // Uniform(0, 1/3) has density = 3
+	const double DENSITY_FLOOR = 1e-10;  // Minimum density to avoid log(0)
+	const double LOG2E = 1.4426950408889634;  // log2(e) for conversion to bits
+
+	double deltaM = UPPER_BOUND / N_GRID;
+	double klNats = 0.0;
+
+	for (int i = 0; i < N_GRID; i++) {
+		double m = (i + 0.5) * deltaM;  // Midpoint of interval
+		double pPost = computeKDEatPoint(m, samples, bandwidth);
+
+		if (pPost > DENSITY_FLOOR) {
+			// KL integrand: p(m|D) * log(p(m|D) / p(m))
+			// where p(m) = 3 for uniform prior on [0, 1/3]
+			klNats += pPost * log(pPost / PRIOR_DENSITY) * deltaM;
+		}
+	}
+
+	// Convert from nats to bits and ensure non-negative
+	double klBits = klNats * LOG2E;
+	return (klBits > 0) ? klBits : 0.0;
+}
+
 // Compute and output Savage-Dickey Bayes factors
 void computeSavageDickeyBayesFactors(SavageDickeyStats **sdStats, unsigned int noPopln,
                                       double priorDensityAtZero, std::ostream &out,
@@ -2916,10 +2971,6 @@ void computeSavageDickeyBayesFactors(SavageDickeyStats **sdStats, unsigned int n
 	out << " (Tests H0: m_ij = 0 vs H1: m_ij > 0)\n\n";
 	out << " Source  Dest     Mean(SD)       BF_01  log10(BF)  KL(bits)  Interpretation\n";
 	out << " ---------------------------------------------------------------------------\n";
-
-	// Prior standard deviation for uniform on [0, 1/3]
-	const double priorSD = (1.0/3.0) / sqrt(12.0);  // ≈ 0.0962
-	const double LOG2E = 1.4426950408889634;  // log2(e)
 
 	for (unsigned int i = 0; i < noPopln; i++) {
 		for (unsigned int j = 0; j < noPopln; j++) {
@@ -2958,14 +3009,9 @@ void computeSavageDickeyBayesFactors(SavageDickeyStats **sdStats, unsigned int n
 			double BF01 = postDensityAtZero / priorDensityAtZero;
 			double log10BF = log10(BF01 > 0 ? BF01 : 1e-10);
 
-			// Compute KL divergence (information gain) in bits
-			// KL(posterior || prior) ≈ log(σ_prior / σ_posterior) for Gaussian approx
-			// In bits: KL = log2(σ_prior / σ_posterior)
-			double klBits = 0.0;
-			if (sd > 0) {
-				klBits = LOG2E * log(priorSD / sd);
-				if (klBits < 0) klBits = 0;  // Can't have negative info gain
-			}
+			// Compute KL divergence using numerical integration
+			// KL(posterior || prior) with exact uniform prior and KDE posterior
+			double klBits = computeKLDivergence(sdStats[i][j].samples, bandwidth);
 
 			// Interpretation
 			std::string interp;

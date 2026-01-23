@@ -95,6 +95,7 @@ struct SavageDickeyStats
 	double sumM2;          // Running sum of squared migration rates (for variance)
 	long int countNearZero; // Count of samples where m < threshold
 	long int nSamples;     // Total number of samples
+	std::vector<double> samples; // Stored samples for KL divergence computation
 };
 
 void printBanner(void);
