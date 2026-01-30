@@ -1765,7 +1765,7 @@ mcmcout << "\n Population Labels:\n";
 		mcmcout << "  [" << l << "] " << poplnNames[l] << "\n";
 	}
 
-	mcmcout << "\n Migration Rate Matrix m[source][dest]:\n";
+	mcmcout << "\n Migration Rate Matrix m[i][j] (fraction of pop i from pop j):\n";
 	mcmcout << " Mean(SD)\n";
 	mcmcout.setf(std::ios::fixed, std::ios::floatfield);
 
