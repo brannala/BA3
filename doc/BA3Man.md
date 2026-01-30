@@ -373,7 +373,7 @@ Maps numeric indices to population names for compact display of the migration ma
 
 #### Migration Rate Matrix
 ```
- Migration Rate Matrix m[source][dest]:
+ Migration Rate Matrix m[i][j] (fraction of pop i from pop j):
  Mean(SD)
                    [0]            [1]            [2]
   [0]  0.9718(0.0115) 0.0130(0.0100) 0.0152(0.0090)
