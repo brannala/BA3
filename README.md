@@ -7,9 +7,9 @@
 This is BayesAss edition 3 (BA3), a program for inference of recent immigration rates between populations using unlinked multilocus genotypes.
 
 BA3 is free software, you can redistribute it and/or modify it under
-the terms of the GNU General Public License.
+the terms of the GNU Affero General Public License.
 
-The GNU General Public License does not permit this software to be
+The GNU Affero General Public License does not permit this software to be
 redistributed in proprietary programs.
 
 This program is distributed in the hope that it will be useful, but
