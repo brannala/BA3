@@ -87,9 +87,12 @@ struct indiv
 	unsigned int migrantPopln;
 	unsigned int migrantAge;
 	unsigned int sex;             // SEX_UNKNOWN / SEX_FEMALE / SEX_MALE
+	unsigned int migrantSex;      // sex of the first-generation migrant in this lineage:
+	                              //   age 1 -> observed sex; age 2 -> latent (migrant parent);
+	                              //   unused for age 0. SEX_UNKNOWN when no sex data.
 	double logL;
 
-	indiv() : genotype(nullptr), samplePopln(0), migrantPopln(0), migrantAge(0), sex(SEX_UNKNOWN), logL(0.0) {}
+	indiv() : genotype(nullptr), samplePopln(0), migrantPopln(0), migrantAge(0), sex(SEX_UNKNOWN), migrantSex(SEX_UNKNOWN), logL(0.0) {}
 };
 
 // Memory allocation helpers

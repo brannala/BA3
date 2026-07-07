@@ -119,7 +119,12 @@ def main():
     print("=" * 64)
 
     # ---- migration rates (off-diagonal) ----
-    print("\nMigration rates  m[i][j], i<-j  (off-diagonal only):")
+    true_m = truth["params"].get("m")
+    if true_m is not None:
+        print("\nMigration rate m[i][j], i<-j  (true m = %.4f per source; "
+              "age-2 rate is 2m):" % true_m)
+    else:
+        print("\nMigration rates  m[i][j], i<-j  (off-diagonal only):")
     print("  %-8s %-14s %-14s %-8s %s" % ("i<-j", "BA3 mean(SD)", "realized age-1", "z", "within tol"))
     if not matrix:
         print("  (no migration matrix found in %s)" % args.ba3out)

@@ -6,9 +6,9 @@ Ground-truth tooling for the sex-biased dispersal model
 ## Workflow
 
 ```
-# 1. Simulate data with known phi and migration rates
-python3 sim/simulate_sexbias.py --phi 0.8 --m1 0.10 --m2 0.05 \
-    --nauto 300 --nx 150 --nind 60 --fst 0.1 --seed 42 --out sim_run
+# 1. Simulate data with known phi and migration rate m
+python3 sim/simulate_sexbias.py --phi 0.8 --m 0.10 \
+    --nauto 200 --nx 200 --nind 200 --fst 0.15 --seed 7 --out sim_run
 
 # 2. Run BA3 on the simulated VCF + metadata (once X/sex support is built)
 ./BA3 -v -M sim_run_meta.txt sim_run.vcf
@@ -48,6 +48,6 @@ When the BA3 sex-bias code is added, emit `phi` in that form (any line containin
 - `phi` is informed by the sex of every first-generation migrant: the age-1
   individuals' own (observed) sex, plus the age-2 individuals' migrant-parent
   sex, with the X markers adding the age-2 **male** signal. For tight `phi`
-  recovery, raise `--m1/--m2`, `--nind`, and `--nx` so there are enough migrants
+  recovery, raise `--m`, `--nind`, and `--nx` so there are enough migrants
   — a handful of lineages gives a noisy empirical `phi`.
 - v1 is HWE within populations (`F = 0`) and biallelic SNPs only.

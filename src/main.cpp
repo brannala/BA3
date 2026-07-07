@@ -153,6 +153,11 @@ const double AUTOTUNE_ADJUST_FACTOR = 1.1;     // multiply/divide delta by this 
 const double AUTOTUNE_DELTA_MIN = 0.001;       // minimum delta value
 const double AUTOTUNE_DELTA_MAX = 0.99;        // maximum delta value
 
+// Sex-biased dispersal: Beta(a,b) prior on the global female fraction phi.
+// a = b = 1 is uniform on (0,1); phi = 1/2 corresponds to no sex bias.
+const double PHI_PRIOR_A = 1.0;
+const double PHI_PRIOR_B = 1.0;
+
 // Fast whitespace-based string splitting (replaces slow regex version)
 std::vector<std::string> split(const std::string& str,
                                const std::string& regex_str) {
@@ -861,6 +866,29 @@ common_processing:
 		exit(1);
 	}
 
+	// Sex-biased dispersal model setup. Active only when sex metadata was
+	// supplied (indivToSex non-empty). Requires complete sex information.
+	bool sexBiasModel = !indivToSex.empty();
+	double phi = 0.5;                 // global female fraction of migrants
+	std::vector<unsigned int> xLoci;  // indices of X-linked loci (for phi/sigma updates)
+	if (sexBiasModel)
+	{
+		for (unsigned int i = 0; i < noIndiv; i++)
+			if (sampleIndiv[i].sex != SEX_FEMALE && sampleIndiv[i].sex != SEX_MALE)
+			{
+				std::cerr << "\nerror: sex-biased model enabled but individual " << i
+				          << " has no sex in the metadata file.\n"
+				          << "       Provide a sex column (F/M) for every individual, or none.\n";
+				exit(1);
+			}
+		for (unsigned int l = 0; l < noLoci; l++)
+			if (l < gLocusType.size() && gLocusType[l] == LOCUS_XLINKED)
+				xLoci.push_back(l);
+		if (gArgs.verbose)
+			std::cout << "Sex-biased dispersal model: ON (phi = female fraction of migrants), "
+			          << xLoci.size() << " X-linked loci\n\n";
+	}
+
 	size_t N=noIndiv;
 	gsl_permutation * p = gsl_permutation_alloc (N);
 
@@ -983,6 +1011,9 @@ common_processing:
 		for (unsigned int j = 0; j < noPopln; j++)
 			varMigrationRates[i][j]=0.0;
 
+	// Posterior mean/variance accumulators for the female fraction phi
+	double avgPhi = 0.0, varPhi = 0.0;
+
 	long int ***migrantCounts;
 	migrantCounts = new long int**[noPopln];
 	for(unsigned int i = 0; i < noPopln; i++)
@@ -1058,7 +1089,8 @@ common_processing:
 	}
 
 	for(unsigned int l = 0; l < noIndiv; l++)
-	{	sampleIndiv[l].migrantAge=0; sampleIndiv[l].migrantPopln=sampleIndiv[l].samplePopln; }
+	{	sampleIndiv[l].migrantAge=0; sampleIndiv[l].migrantPopln=sampleIndiv[l].samplePopln;
+		sampleIndiv[l].migrantSex=SEX_UNKNOWN; }
 	fillMigrantCounts(sampleIndiv,migrantCounts,noIndiv,noPopln);
 
 	for(unsigned int i = 0; i < noIndiv; i++)
@@ -1167,11 +1199,41 @@ if(!NOANCMCMC)
 		tempIndiv.samplePopln = sampleIndiv[chosenIndiv].samplePopln;
 		tempIndiv.migrantPopln = migrantPopAdd;
 		tempIndiv.migrantAge = migrantAgeAdd;
+		tempIndiv.sex = sampleIndiv[chosenIndiv].sex;
 		for(unsigned int j = 0; j < noLoci; j++)
 		{
 			tempIndiv.genotype[j][0] = sampleIndiv[chosenIndiv].genotype[j][0];
 			tempIndiv.genotype[j][1] = sampleIndiv[chosenIndiv].genotype[j][1];
 		}
+
+		// Sex of the first-generation migrant for the proposed ancestry:
+		//   age 1 -> the individual is the migrant, so its observed sex;
+		//   age 2 -> latent migrant-parent sex, proposed from its prior
+		//            Bernoulli(phi). Drawing sigma from the prior makes the
+		//            sigma prior and proposal densities cancel in the MH ratio.
+		double dtLogSex = 0.0;
+		if (sexBiasModel)
+		{
+			if (tempIndiv.migrantAge == 1)
+				tempIndiv.migrantSex = tempIndiv.sex;
+			else if (tempIndiv.migrantAge == 2)
+				tempIndiv.migrantSex = (gsl_rng_uniform(r) < phi) ? SEX_FEMALE : SEX_MALE;
+			else
+				tempIndiv.migrantSex = SEX_UNKNOWN;
+
+			// After the sigma prior/proposal cancellation, the only residual
+			// sex term per individual is: log(phi_obs) if age 1, else log(1/2).
+			// (Age-0/age-2 own-sex is Mendelian 1/2; the age-2 latent sigma
+			// factor cancels; age-1 own sex is the migrant sex ~ phi.)
+			auto sexTerm = [&](unsigned int age)->double {
+				if (age == 1)
+					return (sampleIndiv[chosenIndiv].sex == SEX_FEMALE) ? log(phi) : log(1.0 - phi);
+				return log(0.5);
+			};
+			dtLogSex = sexTerm(tempIndiv.migrantAge) - sexTerm(sampleIndiv[chosenIndiv].migrantAge);
+		}
+		else
+			tempIndiv.migrantSex = SEX_UNKNOWN;
 
 		// calculate change of logL for genetic data with new migrant ancestry
 		if (!NOLIKELIHOOD)
@@ -1250,14 +1312,15 @@ if(!NOANCMCMC)
 		// Acceptance-rejection step
 		alpha = gsl_rng_uniform(r);
 		if(!NOLIKELIHOOD)
-			logPrMHR = dtLogPrCount + dtLogL + logHastings;
+			logPrMHR = dtLogPrCount + dtLogL + logHastings + dtLogSex;
 		else
-			logPrMHR = dtLogPrCount + logHastings;
+			logPrMHR = dtLogPrCount + logHastings + dtLogSex;
 
 		if(alpha <= exp(logPrMHR))
 		{
 			sampleIndiv[chosenIndiv].migrantAge = tempIndiv.migrantAge;
 			sampleIndiv[chosenIndiv].migrantPopln = tempIndiv.migrantPopln;
+			sampleIndiv[chosenIndiv].migrantSex = tempIndiv.migrantSex;
 			if (!NOLIKELIHOOD)
 				sampleIndiv[chosenIndiv].logL = logLprop;
 			fillMigrantCounts(sampleIndiv,migrantCounts,noIndiv,noPopln);
@@ -1544,6 +1607,64 @@ if(!NOMISSINGDATA)
 	}
 }
 
+// Sex-biased dispersal: Gibbs-update the migrant-parent sex (sigma) of every
+// second-generation migrant, then the global female fraction phi.
+if (sexBiasModel)
+{
+	long int nF = 0, nM = 0;
+	for (unsigned int m = 0; m < noIndiv; m++)
+	{
+		unsigned int age = sampleIndiv[m].migrantAge;
+		if (age == 1)
+		{
+			// First-generation migrant: migrant sex = individual's observed sex.
+			sampleIndiv[m].migrantSex = sampleIndiv[m].sex;
+			if (sampleIndiv[m].sex == SEX_FEMALE) nF++; else nM++;
+		}
+		else if (age == 2)
+		{
+			unsigned int newSigma;
+			if (sampleIndiv[m].sex == SEX_MALE && !xLoci.empty())
+			{
+				// A male's single X is from the source population if the migrant
+				// parent was the mother (sigma = F) and from the native population
+				// if the father (sigma = M). Gibbs from the posterior log-odds.
+				const unsigned int src = sampleIndiv[m].migrantPopln;
+				const unsigned int nat = sampleIndiv[m].samplePopln;
+				double logOdds = log(phi) - log(1.0 - phi);   // prior log-odds F:M
+				for (size_t xi = 0; xi < xLoci.size(); xi++)
+				{
+					unsigned int l = xLoci[xi];
+					if (sampleIndiv[m].genotype[l][1] != HEMIZYGOUS) continue;
+					int a0 = sampleIndiv[m].genotype[l][0];
+					if (a0 < 0) continue;
+					logOdds += logAlleleFreqs[src][l][a0] - logAlleleFreqs[nat][l][a0];
+				}
+				double pF = 1.0 / (1.0 + exp(-logOdds));
+				newSigma = (gsl_rng_uniform(r) < pF) ? SEX_FEMALE : SEX_MALE;
+			}
+			else
+			{
+				// Female (or no X loci): sigma has no likelihood effect -> prior.
+				newSigma = (gsl_rng_uniform(r) < phi) ? SEX_FEMALE : SEX_MALE;
+			}
+			if (newSigma != sampleIndiv[m].migrantSex)
+			{
+				sampleIndiv[m].migrantSex = newSigma;
+				// Only a male's genotype likelihood depends on sigma.
+				if (sampleIndiv[m].sex == SEX_MALE && !NOLIKELIHOOD)
+					sampleIndiv[m].logL = logLik(sampleIndiv[m], alleleFreqs, logAlleleFreqs,
+					                             FStat, log1MinusFStat, noLoci);
+			}
+			if (sampleIndiv[m].migrantSex == SEX_FEMALE) nF++; else nM++;
+		}
+	}
+	// Beta-Bernoulli conjugate update of phi, then clamp away from 0/1.
+	phi = gsl_ran_beta(r, PHI_PRIOR_A + (double)nF, PHI_PRIOR_B + (double)nM);
+	if (phi < 1e-6) phi = 1e-6;
+	if (phi > 1.0 - 1e-6) phi = 1.0 - 1e-6;
+}
+
 // Autotune: adjust delta values during burn-in to achieve target acceptance rate
 if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL) == 0 && i > 0)
 {
@@ -1727,6 +1848,17 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 			// Update Savage-Dickey statistics for migration rate hypothesis testing
 			updateSavageDickeyStats(sdStats, migrationRates, noPopln, SD_BANDWIDTH);
 
+			// Accumulate posterior mean/variance of the female fraction phi
+			if (sexBiasModel)
+			{
+				if (iter > 1)
+				{
+					double d = (phi - avgPhi) * (phi - avgPhi) / (iter + 1.0);
+					varPhi = ((iter - 1.0) / iter) * varPhi + d;
+				}
+				avgPhi = avgPhi + (phi - avgPhi) / (1.0 + iter);
+			}
+
 			for (unsigned int l = 0; l < noPopln; l++)
 				for (unsigned int k = 0; k < noLoci; k++)
 					for(unsigned int m = 0; m < noAlleles[k]; m++)
@@ -1886,6 +2018,17 @@ mcmcout << "\n Population Labels:\n";
 
 	// Output Savage-Dickey test results for zero migration hypotheses
 	computeSavageDickeyBayesFactors(sdStats, noPopln, PRIOR_DENSITY_AT_ZERO, mcmcout, poplnNames);
+
+	// Sex-biased dispersal: report the estimated female fraction of migrants.
+	if (sexBiasModel)
+	{
+		mcmcout.setf(std::ios::fixed, std::ios::floatfield);
+		mcmcout << "\n Sex-biased dispersal:\n";
+		mcmcout << " Dispersal female fraction phi: " << std::setprecision(4) << avgPhi
+		        << "(" << std::setprecision(4) << sqrt(varPhi) << ")\n";
+		mcmcout << "   (phi = 0.5 is no sex bias; phi > 0.5 female-biased, "
+		        << "phi < 0.5 male-biased dispersal)\n";
+	}
 
 	mcmcout << "\n Inbreeding Coefficients:\n";
 	mcmcout << " Index  Population                     F(SD)\n";
@@ -2760,13 +2903,22 @@ double logLik(const indiv& Indiv, double ***alleleFreqs, double ***logAlleleFreq
 
 			if (a1 == HEMIZYGOUS)
 			{
-				// Hemizygous male X (single gene copy). Marginalizing over the
-				// migrant parent's sex gives 1/2 (source + native):
-				// log(0.5 * (p_mig + p_sam)) via log-sum-exp.
-				const double t1 = logFreqMig[i][a0];
-				const double t2 = logFreqSam[i][a0];
-				const double mx = (t1 > t2) ? t1 : t2;
-				logPr += mx + log(exp(t1 - mx) + exp(t2 - mx)) - LOG2;
+				// Hemizygous male X (single gene copy) in a 2nd-generation migrant.
+				// A male's single X comes from his mother, so the copy is from the
+				// source population if the migrant parent was the mother (migrantSex
+				// = female) and from the native population if it was the father.
+				if (Indiv.migrantSex == SEX_FEMALE)
+					logPr += logFreqMig[i][a0];        // X from source (mother migrated)
+				else if (Indiv.migrantSex == SEX_MALE)
+					logPr += logFreqSam[i][a0];        // X from native (father migrated)
+				else
+				{
+					// Unknown migrant-parent sex: marginalize 1/2 (source + native)
+					const double t1 = logFreqMig[i][a0];
+					const double t2 = logFreqSam[i][a0];
+					const double mx = (t1 > t2) ? t1 : t2;
+					logPr += mx + log(exp(t1 - mx) + exp(t2 - mx)) - LOG2;
+				}
 			}
 			else if (a0 == a1)
 			{
@@ -2802,11 +2954,19 @@ double oneLocusLogLik(const indiv& Indiv, double ***alleleFreqs, double ***logAl
 			logPr = logAlleleFreqs[Indiv.migrantPopln][chosenLocus][a0];
 		else
 		{
-			// age 2: marginalize migrant parent sex -> 1/2 (source + native)
-			const double t1 = logAlleleFreqs[Indiv.migrantPopln][chosenLocus][a0];
-			const double t2 = logAlleleFreqs[Indiv.samplePopln][chosenLocus][a0];
-			const double mx = (t1 > t2) ? t1 : t2;
-			logPr = mx + log(exp(t1 - mx) + exp(t2 - mx)) - LOG2;
+			// age 2 male X: single copy from source if migrant parent is the
+			// mother (migrantSex = female), else from native; unknown -> 1/2 each.
+			if (Indiv.migrantSex == SEX_FEMALE)
+				logPr = logAlleleFreqs[Indiv.migrantPopln][chosenLocus][a0];
+			else if (Indiv.migrantSex == SEX_MALE)
+				logPr = logAlleleFreqs[Indiv.samplePopln][chosenLocus][a0];
+			else
+			{
+				const double t1 = logAlleleFreqs[Indiv.migrantPopln][chosenLocus][a0];
+				const double t2 = logAlleleFreqs[Indiv.samplePopln][chosenLocus][a0];
+				const double mx = (t1 > t2) ? t1 : t2;
+				logPr = mx + log(exp(t1 - mx) + exp(t2 - mx)) - LOG2;
+			}
 		}
 		return logPr;
 	}

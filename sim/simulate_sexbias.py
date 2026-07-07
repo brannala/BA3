@@ -14,9 +14,11 @@ populations connected by known, sex-specific migration, then writes:
   <out>_truth.json ground-truth parameters and per-individual true ancestry
 
 Model (matches the design doc, migrantAge in {0,1,2}):
-  * Each individual is a non-migrant (age 0), a first-generation migrant from a
-    source population (age 1), or a second-generation migrant / F1 hybrid whose
-    single migrant parent came from a source (age 2).
+  * Ancestry is drawn from BA3's own multinomial: for an individual in pop s,
+    P(age 1 from j) = m, P(age 2 from j) = 2m, P(native) = 1 - 3*sum_j m, so
+    second-generation migrants occur at twice the first-generation rate (total
+    3m per source; requires m < 1/(3*(npop-1))). This matches what BA3 infers,
+    so both m and phi are recoverable.
   * The first-generation migrant is female with probability phi (the global
     dispersal female fraction). A first-gen migrant (age 1) *is* the sampled
     individual, so its own sex equals the migrant sex. A second-gen migrant
@@ -33,8 +35,8 @@ Population differentiation is generated with a Balding-Nichols draw controlled
 by Fst. Everything is pure Python stdlib (no numpy required).
 
 Example:
-    python3 sim/simulate_sexbias.py --npop 2 --nind 60 --phi 0.8 \
-        --m1 0.10 --m2 0.05 --nauto 300 --nx 150 --fst 0.1 --seed 42 --out sim_run
+    python3 sim/simulate_sexbias.py --npop 2 --nind 200 --phi 0.8 \
+        --m 0.10 --nauto 200 --nx 200 --fst 0.15 --seed 7 --out sim_run
 """
 
 import argparse
@@ -70,20 +72,28 @@ def copy(freq, rng):
     return 1 if rng.random() < freq else 0
 
 
-def assign_ancestry(s, npop, m1, m2, rng):
-    """Draw (age, source) for one individual in population s.
+def assign_ancestry(s, npop, m, rng):
+    """Draw (age, source) for one individual in population s, using BA3's own
+    migrant-ancestry multinomial:
+
+        P(native, age 0)      = 1 - 3 * sum_j m[s<-j]
+        P(age 1 from j)       = m[s<-j]
+        P(age 2 from j)       = 2 * m[s<-j]
+
+    i.e. second-generation migrants occur at twice the first-generation rate,
+    matching the prior BA3 assumes (total 3m per source, hence sum m < 1/3).
 
     age 0 -> (0, None); age 1/2 -> (age, source_pop)."""
     others = [b for b in range(npop) if b != s]
     # Categorical over: native, (age1, b) for each b, (age2, b) for each b.
     labels = [(0, None)]
-    weights = [1.0 - (m1 + m2) * len(others)]
+    weights = [1.0 - 3.0 * m * len(others)]
     for b in others:
         labels.append((1, b))
-        weights.append(m1)
+        weights.append(m)
     for b in others:
         labels.append((2, b))
-        weights.append(m2)
+        weights.append(2.0 * m)
     r = rng.random()
     cumulative = 0.0
     for (label, w) in zip(labels, weights):
@@ -97,9 +107,11 @@ def simulate(args):
     rng = random.Random(args.seed)
 
     npop = args.npop
-    total_mig_rate = (args.m1 + args.m2) * (npop - 1)
+    # BA3 constraint: total migrant ancestry per population is 3m per source.
+    total_mig_rate = 3.0 * args.m * (npop - 1)
     if total_mig_rate >= 1.0:
-        sys.exit("Error: (m1 + m2) * (npop - 1) = %.3f must be < 1." % total_mig_rate)
+        sys.exit("Error: 3 * m * (npop - 1) = %.3f must be < 1 (so m < 1/(3*(npop-1)))."
+                 % total_mig_rate)
 
     # Per-population allele frequencies (ALT), separately for autosomal and X.
     auto_freq = build_freqs(args.nauto, args.fst, npop, rng, args.fmin)
@@ -111,7 +123,7 @@ def simulate(args):
 
     for s in range(npop):
         for k in range(args.nind):
-            age, source = assign_ancestry(s, npop, args.m1, args.m2, rng)
+            age, source = assign_ancestry(s, npop, args.m, rng)
 
             # Sex assignment and the migrant's sex.
             if age == 0:
@@ -238,10 +250,9 @@ def main():
     p.add_argument("--nind", type=int, default=60, help="individuals per population")
     p.add_argument("--phi", type=float, default=0.8,
                    help="female fraction of migrants (0..1); 0.5 = no sex bias")
-    p.add_argument("--m1", type=float, default=0.10,
-                   help="per-source first-generation migrant rate (age 1)")
-    p.add_argument("--m2", type=float, default=0.05,
-                   help="per-source second-generation migrant rate (age 2)")
+    p.add_argument("--m", type=float, default=0.10,
+                   help="per-source migration rate m (BA3's m[i][j]); age-1 rate is "
+                        "m and age-2 rate is 2m, so m < 1/(3*(npop-1))")
     p.add_argument("--nauto", type=int, default=300, help="number of autosomal SNP loci")
     p.add_argument("--nx", type=int, default=150, help="number of X-linked SNP loci")
     p.add_argument("--fst", type=float, default=0.1,
@@ -268,7 +279,7 @@ def main():
     truth = {
         "params": {
             "npop": args.npop, "nind_per_pop": args.nind, "phi": args.phi,
-            "m1": args.m1, "m2": args.m2, "nauto": args.nauto, "nx": args.nx,
+            "m": args.m, "nauto": args.nauto, "nx": args.nx,
             "fst": args.fst, "fmin": args.fmin, "seed": args.seed,
         },
         "summary": summary,
