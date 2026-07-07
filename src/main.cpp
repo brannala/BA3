@@ -32,7 +32,7 @@ struct globalArgs {
 	int mciter;
 	int sampling;
 	int burnin;
-	char outfileName[100];
+	char outfileName[256];
 	int usingOutfile;
 	double deltaM;
 	double deltaA;
