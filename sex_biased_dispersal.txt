@@ -1,0 +1,7 @@
+Adding sex-biased dispersal to BA3:
+This is the outline of modifications needed to allow inference of different migration rates for males and females in BA3.
+Additional metadata: Sex for each individual (could come from a genome sex specific e.g., Y chromosome sequence but for simplicity start with this as metadata).
+Genome region identities: Need to know what part of the genome is X chromosome (ideally exclude pseudoautomsomal regions).
+Model: double the number of migration rates. For two populations:
+M12_f M12_m M21_f M21_m instead of M12 and M21.
+Idea: First generation migrants are either male or female so inform directly about male and female rates. Second generation migrants that are male and are sampled from pop A had a mother who was a migrant from pop B if their X chromosome comes from pop B. Third generations migrants that are male have 0.5 prob that X chromm somes from B if mother was migrant. second generation females have 1 X from A and 1 X from B but which is which is unknown so both possibilities must be considered. Similarly 3rd generation 0.5 of one X is from B but which is uncertain. I would like to generate a probability model based on this, retaining all the usual BA3 assumptions about HWE, constant allele freqs etc.  
