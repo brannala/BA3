@@ -158,6 +158,12 @@ const double AUTOTUNE_DELTA_MAX = 0.99;        // maximum delta value
 const double PHI_PRIOR_A = 1.0;
 const double PHI_PRIOR_B = 1.0;
 
+// Migrant breeding-success multiplier gamma (tau = 2*gamma = age-2:age-1 rate
+// ratio). Weakly-informative log-normal prior centered at gamma = 1 (no change
+// in migrant breeding success); GAMMA_PROP_SD scales the log-scale random walk.
+const double GAMMA_PRIOR_LOGSD = 1.0;
+const double GAMMA_PROP_SD = 0.15;
+
 // Integral over [0,1] of the product of two Beta densities (midpoint rule).
 // Used for the Rao-Blackwellized Savage-Dickey test of H0: phi = rho, since the
 // posterior density of (phi - rho) at 0 equals int_0^1 f_phi(t) f_rho(t) dt.
@@ -888,6 +894,7 @@ common_processing:
 	double phiMove = 0.5;             // female fraction of age-1 migrants (movement)
 	double phiBreed = 0.5;            // female fraction of age-2 migrant parents (gene flow)
 	double rho = 0.5;                 // female fraction of residents (non-dispersers)
+	double gamma = 1.0;               // migrant breeding-success multiplier (tau = 2*gamma)
 	std::vector<unsigned int> xLoci;  // indices of X-linked loci (for phiBreed/sigma updates)
 	if (sexBiasModel)
 	{
@@ -1044,6 +1051,9 @@ common_processing:
 	double sdBreedEqRhoSum = 0.0;   // H0: phiBreed = rho
 	double sdMoveEqBreedSum = 0.0;  // H0: phiMove  = phiBreed
 	long int sdPhiNSamples = 0;
+	// Migrant breeding-success multiplier gamma (posterior mean/var; P(gamma<1)).
+	double avgGamma = 0.0, varGamma = 0.0;
+	long int gammaLtOneCount = 0, gammaNSamples = 0;
 
 	long int ***migrantCounts;
 	migrantCounts = new long int**[noPopln];
@@ -1088,9 +1098,9 @@ common_processing:
 	{
 		for(unsigned int k=0; k<=noPopln; k++)
 			if((l!=k)&&(k!=noPopln))
-				migrationRates[l][k] = (1.0/3.0)*(1.0/noPopln);
-		migrationRates[l][l] = 1.0-(1.0/3.0)*((noPopln-1.0)/noPopln);
-		migrationRates[l][noPopln] = (1.0/3.0)*((noPopln-1.0)/noPopln);
+				migrationRates[l][k] = (1.0/(1.0+2.0*gamma))*(1.0/noPopln);
+		migrationRates[l][l] = 1.0-(1.0/(1.0+2.0*gamma))*((noPopln-1.0)/noPopln);
+		migrationRates[l][noPopln] = (1.0/(1.0+2.0*gamma))*((noPopln-1.0)/noPopln);
 	}
 
 	getEmpiricalAlleleFreqs(alleleFreqs,sampleIndiv,noAlleles,noPopln,noLoci,noIndiv);
@@ -1129,7 +1139,7 @@ common_processing:
 
 	if(gArgs.debug)
 	{
-		std::cout << "mCLp: " << migCountLogProb(migrantCounts,migrationRates,noPopln) << "\n";
+		std::cout << "mCLp: " << migCountLogProb(migrantCounts,migrationRates,noPopln,gamma) << "\n";
 		for(unsigned int i = 0; i < noPopln; i++)
 			for(unsigned int j = 0; j < noPopln; j++)
 				for(int k = 0; k < 3; k++)
@@ -1282,7 +1292,7 @@ if(!NOANCMCMC)
 		{
 		if(tempIndiv.migrantAge == 0)
 		{
-			dtLogPrCount += (log(1.0-3.0*migrationRates[tempIndiv.samplePopln][noPopln])-
+			dtLogPrCount += (log(1.0-(1.0+2.0*gamma)*migrationRates[tempIndiv.samplePopln][noPopln])-
 			log(migrantCounts[tempIndiv.samplePopln][tempIndiv.migrantPopln][0]+1.0));
 
 		}
@@ -1296,13 +1306,13 @@ if(!NOANCMCMC)
 		else
 		if(tempIndiv.migrantAge == 2)
 		{
-			dtLogPrCount += (log(2.0*migrationRates[tempIndiv.samplePopln][tempIndiv.migrantPopln])-
+			dtLogPrCount += (log(2.0*gamma*migrationRates[tempIndiv.samplePopln][tempIndiv.migrantPopln])-
 			log(migrantCounts[tempIndiv.samplePopln][tempIndiv.migrantPopln][2]+1.0));
 		}
 
 		if(sampleIndiv[chosenIndiv].migrantAge == 0)
 		{
-			dtLogPrCount -= (log(1.0-3.0*migrationRates[sampleIndiv[chosenIndiv].samplePopln][noPopln]) -
+			dtLogPrCount -= (log(1.0-(1.0+2.0*gamma)*migrationRates[sampleIndiv[chosenIndiv].samplePopln][noPopln]) -
 			log(migrantCounts[sampleIndiv[chosenIndiv].samplePopln][sampleIndiv[chosenIndiv].migrantPopln][0]));
 		}
 		else
@@ -1314,7 +1324,7 @@ if(!NOANCMCMC)
 			else
 				if(sampleIndiv[chosenIndiv].migrantAge == 2)
 				{
-					dtLogPrCount -= (log(2.0*migrationRates[sampleIndiv[chosenIndiv].samplePopln][sampleIndiv[chosenIndiv].migrantPopln]) -
+					dtLogPrCount -= (log(2.0*gamma*migrationRates[sampleIndiv[chosenIndiv].samplePopln][sampleIndiv[chosenIndiv].migrantPopln]) -
 					log(migrantCounts[sampleIndiv[chosenIndiv].samplePopln][sampleIndiv[chosenIndiv].migrantPopln][2]));
 				}
 		}
@@ -1379,13 +1389,13 @@ if(!NOMIGRATEMCMC)
 		else
 		{
 			propMigrationRates[j] = gArgs.deltaM*(gsl_rng_uniform(r)-0.5) + migrationRates[sourcePopln][j];
-			while ((propMigrationRates[j]<0)||(propMigrationRates[j]>(1.0/3.0-migrationRates[sourcePopln][noPopln]+migrationRates[sourcePopln][j])))
+			while ((propMigrationRates[j]<0)||(propMigrationRates[j]>(1.0/(1.0+2.0*gamma)-migrationRates[sourcePopln][noPopln]+migrationRates[sourcePopln][j])))
 			{
 				if (propMigrationRates[j]<0) {
 					propMigrationRates[j]=std::fabs(propMigrationRates[j]);
 				}
-				if (propMigrationRates[j]>(1.0/3.0-migrationRates[sourcePopln][noPopln]+migrationRates[sourcePopln][j]))
-					propMigrationRates[j]=2.0*(1.0/3.0-migrationRates[sourcePopln][noPopln]+migrationRates[sourcePopln][j])-propMigrationRates[j];
+				if (propMigrationRates[j]>(1.0/(1.0+2.0*gamma)-migrationRates[sourcePopln][noPopln]+migrationRates[sourcePopln][j]))
+					propMigrationRates[j]=2.0*(1.0/(1.0+2.0*gamma)-migrationRates[sourcePopln][noPopln]+migrationRates[sourcePopln][j])-propMigrationRates[j];
 			}
 		}
 	}
@@ -1396,16 +1406,16 @@ if(!NOMIGRATEMCMC)
 		if(sourcePopln != l)
 			{
 				logPrCurr += migrantCounts[sourcePopln][l][1]*log(migrationRates[sourcePopln][l])-gsl_sf_lnfact(migrantCounts[sourcePopln][l][1]);
-				logPrCurr += migrantCounts[sourcePopln][l][2]*log(2.0*migrationRates[sourcePopln][l])-gsl_sf_lnfact(migrantCounts[sourcePopln][l][2]);
+				logPrCurr += migrantCounts[sourcePopln][l][2]*log(2.0*gamma*migrationRates[sourcePopln][l])-gsl_sf_lnfact(migrantCounts[sourcePopln][l][2]);
 			}
-	logPrCurr += migrantCounts[sourcePopln][sourcePopln][0]*log(1.0-3*migrationRates[sourcePopln][noPopln]) - gsl_sf_lnfact(migrantCounts[sourcePopln][sourcePopln][0]);
+	logPrCurr += migrantCounts[sourcePopln][sourcePopln][0]*log(1.0-(1.0+2.0*gamma)*migrationRates[sourcePopln][noPopln]) - gsl_sf_lnfact(migrantCounts[sourcePopln][sourcePopln][0]);
 	for(unsigned int l = 0; l < noPopln; l++)
 		if(sourcePopln != l)
 		{
 			logPrProp += migrantCounts[sourcePopln][l][1]*log(propMigrationRates[l])-gsl_sf_lnfact(migrantCounts[sourcePopln][l][1]);
-			logPrProp += migrantCounts[sourcePopln][l][2]*log(2.0*propMigrationRates[l])-gsl_sf_lnfact(migrantCounts[sourcePopln][l][2]);
+			logPrProp += migrantCounts[sourcePopln][l][2]*log(2.0*gamma*propMigrationRates[l])-gsl_sf_lnfact(migrantCounts[sourcePopln][l][2]);
 		}
-	logPrProp += migrantCounts[sourcePopln][sourcePopln][0]*log(1.0-3*propMigrationRates[noPopln]) - gsl_sf_lnfact(migrantCounts[sourcePopln][sourcePopln][0]);
+	logPrProp += migrantCounts[sourcePopln][sourcePopln][0]*log(1.0-(1.0+2.0*gamma)*propMigrationRates[noPopln]) - gsl_sf_lnfact(migrantCounts[sourcePopln][sourcePopln][0]);
 
 	// Acceptance-rejection step
 	alpha = gsl_rng_uniform(r);
@@ -1639,6 +1649,39 @@ if(!NOMISSINGDATA)
 	}
 }
 
+// Metropolis-Hastings update of the migrant breeding-success multiplier gamma
+// (tau = 2*gamma = age-2:age-1 rate ratio). Random walk on log(gamma); the age
+// counts inform it. Requires (1+tau)*sum_m < 1 in every population.
+if (!NOMIGRATEMCMC)
+{
+	double propLogGamma = log(gamma) + gsl_ran_gaussian(r, GAMMA_PROP_SD);
+	double propGamma = exp(propLogGamma);
+	double tProp = 2.0 * propGamma, tCur = 2.0 * gamma;
+	bool feasible = true;
+	for (unsigned int s = 0; s < noPopln && feasible; s++)
+		if ((1.0 + tProp) * migrationRates[s][noPopln] >= 1.0) feasible = false;
+	if (feasible)
+	{
+		double curLL = 0.0, propLL = 0.0;
+		for (unsigned int s = 0; s < noPopln; s++)
+		{
+			long int n0 = migrantCounts[s][s][0];
+			curLL  += n0 * log(1.0 - (1.0 + tCur)  * migrationRates[s][noPopln]);
+			propLL += n0 * log(1.0 - (1.0 + tProp) * migrationRates[s][noPopln]);
+			long int n2s = 0;
+			for (unsigned int b = 0; b < noPopln; b++)
+				if (b != s) n2s += migrantCounts[s][b][2];
+			curLL  += n2s * log(tCur);
+			propLL += n2s * log(tProp);
+		}
+		double lsd2 = GAMMA_PRIOR_LOGSD * GAMMA_PRIOR_LOGSD;
+		double logPriorCur  = -0.5 * log(gamma) * log(gamma) / lsd2;   // log(gamma) ~ N(0, sd)
+		double logPriorProp = -0.5 * propLogGamma * propLogGamma / lsd2;
+		if (log(gsl_rng_uniform(r)) < (propLL + logPriorProp) - (curLL + logPriorCur))
+			gamma = propGamma;
+	}
+}
+
 // Sex-biased dispersal: Gibbs-update the migrant-parent sex (sigma) of every
 // second-generation migrant, then the migrant (phi) and resident (rho) female
 // fractions. phi counts dispersers (age-1 own sex + age-2 migrant-parent sex);
@@ -1796,7 +1839,7 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 		{
 			double logLG=0.0, logLM=0.0;
 			for (unsigned int m=0; m < noIndiv; m++) { logLG += sampleIndiv[m].logL; }
-			logLM = migCountLogProb(migrantCounts,migrationRates,noPopln);
+			logLM = migCountLogProb(migrantCounts,migrationRates,noPopln,gamma);
 			tracefile << i << "\t" << logLM + logLG << "\t";
 		}
 
@@ -1818,7 +1861,7 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 					logLG=0;
 				}
 
-				logLM = migCountLogProb(migrantCounts,migrationRates,noPopln);
+				logLM = migCountLogProb(migrantCounts,migrationRates,noPopln,gamma);
 				std::cout.setf(std::ios::fixed, std::ios::floatfield);
 				std::cout << std::setprecision(2) << "logP(M): " << logLM << " logL(G): ";
 				std::cout << logLG << " logL: " << logLM + logLG << " \% done: " << std::flush;
@@ -1841,7 +1884,7 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 					logLG=0;
 				}
 
-				logLM = migCountLogProb(migrantCounts,migrationRates,noPopln);
+				logLM = migCountLogProb(migrantCounts,migrationRates,noPopln,gamma);
 				std::cout.setf(std::ios::fixed, std::ios::floatfield);
 				std::cout << std::setprecision(2) << "logP(M): " << logLM << " logL(G): " << logLG << " logL: ";
 				std::cout << logLM + logLG << " \% done: "<< std::flush;
@@ -1899,6 +1942,14 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 
 			// Update Savage-Dickey statistics for migration rate hypothesis testing
 			updateSavageDickeyStats(sdStats, migrationRates, noPopln, SD_BANDWIDTH);
+
+			// Accumulate the migrant breeding-success multiplier gamma.
+			if (gammaNSamples > 1)
+				varGamma = ((gammaNSamples-1.0)/gammaNSamples)*varGamma
+				           + (gamma - avgGamma)*(gamma - avgGamma)/(gammaNSamples+1.0);
+			avgGamma = avgGamma + (gamma - avgGamma)/(1.0 + gammaNSamples);
+			if (gamma < 1.0) gammaLtOneCount++;
+			gammaNSamples++;
 
 			// Accumulate posteriors for phiMove (movement), phiBreed (gene flow),
 			// rho (residents), and the three Savage-Dickey equality tests.
@@ -2086,6 +2137,22 @@ mcmcout << "\n Population Labels:\n";
 
 	// Output Savage-Dickey test results for zero migration hypotheses
 	computeSavageDickeyBayesFactors(sdStats, noPopln, PRIOR_DENSITY_AT_ZERO, mcmcout, poplnNames);
+
+	// Migrant breeding success: gamma = relative breeding success of migrants
+	// (tau = 2*gamma is the age-2:age-1 rate ratio). gamma = 1 means migrants breed
+	// at the resident rate (BA3's original assumption); gamma < 1 means reduced
+	// migrant breeding success. The effective (gene-flow) migration rate is ~gamma
+	// times the apparent (movement) rate m.
+	{
+		double pReduced = (gammaNSamples > 0) ? (double)gammaLtOneCount/gammaNSamples : 0.0;
+		mcmcout.setf(std::ios::fixed, std::ios::floatfield);
+		mcmcout << "\n Migrant breeding success:\n";
+		mcmcout << "   gamma (migrant breeding success rel. to residents) = "
+		        << std::setprecision(4) << avgGamma << "(" << sqrt(varGamma) << ")\n";
+		mcmcout << "   age-2:age-1 rate ratio tau = 2*gamma = " << std::setprecision(4) << 2.0*avgGamma
+		        << ";  P(gamma < 1, reduced migrant breeding) = " << std::setprecision(3) << pReduced << "\n";
+		mcmcout << "   (gamma = 1: migrants breed like residents; effective gene-flow rate ~ gamma * movement rate m)\n";
+	}
 
 	// Sex-biased dispersal: report the female fractions for movement (phiMove,
 	// age-1 migrants), effective gene flow (phiBreed, age-2 migrant parents), and
@@ -2870,8 +2937,12 @@ void fillMigrantCounts(indiv *sampleIndiv, long int ***migrantCounts, unsigned i
 		migrantCounts[sampleIndiv[i].samplePopln][sampleIndiv[i].migrantPopln][sampleIndiv[i].migrantAge] += 1;
 }
 
-double migCountLogProb(long int ***migrantCounts, double **migrationRates, unsigned int noPopln)
+// gamma = migrant relative breeding success; tau = 2*gamma is the age-2:age-1
+// rate ratio (P(age2)=tau*m, P(age0)=1-(1+tau)*sum m). gamma=1 (tau=2) is BA3's
+// original assumption that migrants breed at the resident rate.
+double migCountLogProb(long int ***migrantCounts, double **migrationRates, unsigned int noPopln, double gamma)
 {
+	const double tau = 2.0 * gamma;
 	double logPr=0.0;
 	for(unsigned int l = 0; l < noPopln; l++)
 	{
@@ -2879,9 +2950,9 @@ double migCountLogProb(long int ***migrantCounts, double **migrationRates, unsig
 			if(l != k)
 			{
 				logPr+=migrantCounts[l][k][1]*log(migrationRates[l][k])-gsl_sf_lnfact(migrantCounts[l][k][1]);
-				logPr+=migrantCounts[l][k][2]*log(2.0*migrationRates[l][k])-gsl_sf_lnfact(migrantCounts[l][k][2]);
+				logPr+=migrantCounts[l][k][2]*log(tau*migrationRates[l][k])-gsl_sf_lnfact(migrantCounts[l][k][2]);
 			}
-		logPr+=migrantCounts[l][l][0]*log(1.0-3*migrationRates[l][noPopln]) - gsl_sf_lnfact(migrantCounts[l][l][0]);
+		logPr+=migrantCounts[l][l][0]*log(1.0-(1.0+tau)*migrationRates[l][noPopln]) - gsl_sf_lnfact(migrantCounts[l][l][0]);
 	}
 	return(logPr);
 }

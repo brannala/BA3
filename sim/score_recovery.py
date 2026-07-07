@@ -60,15 +60,16 @@ def parse_migration_matrix(lines):
 
 
 def parse_sexbias(lines):
-    """Parse the sex-biased dispersal block. Each parameter line begins with the
-    parameter name (rho / phiMove / phiBreed). Returns {name: (mean, sd)}."""
+    """Parse the sex-biased dispersal and breeding-success blocks. Each parameter
+    line begins with the parameter name (rho / phiMove / phiBreed / gamma).
+    Returns {name: (mean, sd)}."""
     out = {}
     for line in lines:
         toks = line.strip().split()
         if not toks:
             continue
         key = toks[0]
-        if key in ("rho", "phiMove", "phiBreed") and key not in out:
+        if key in ("rho", "phiMove", "phiBreed", "gamma") and key not in out:
             m = EST_RE.search(line)
             if m:
                 out[key] = (float(m.group(1)), float(m.group(2)))
@@ -160,6 +161,7 @@ def main():
         ("phiMove",  prm.get("phi_move"),  smry.get("empirical_phi_move"),  "movement (age-1)"),
         ("phiBreed", prm.get("phi_breed"), smry.get("empirical_phi_breed"), "gene flow (age-2)"),
         ("rho",      None,                 smry.get("empirical_rho"),       "residents"),
+        ("gamma",    prm.get("gamma"),     None,                            "breeding success"),
     ]
     print("\nSex-biased dispersal  (female fractions):")
     print("  %-9s %-16s %-10s %-8s %s" % ("param", "BA3 mean(SD)", "target", "z", "within tol"))

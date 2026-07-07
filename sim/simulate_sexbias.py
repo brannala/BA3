@@ -72,28 +72,31 @@ def copy(freq, rng):
     return 1 if rng.random() < freq else 0
 
 
-def assign_ancestry(s, npop, m, rng):
-    """Draw (age, source) for one individual in population s, using BA3's own
-    migrant-ancestry multinomial:
+def assign_ancestry(s, npop, m, gamma, rng):
+    """Draw (age, source) for one individual in population s, using BA3's
+    migrant-ancestry multinomial with a migrant breeding-success multiplier
+    gamma (tau = 2*gamma = age-2:age-1 rate ratio):
 
-        P(native, age 0)      = 1 - 3 * sum_j m[s<-j]
         P(age 1 from j)       = m[s<-j]
-        P(age 2 from j)       = 2 * m[s<-j]
+        P(age 2 from j)       = tau * m[s<-j]        (tau = 2*gamma)
+        P(native, age 0)      = 1 - (1 + tau) * sum_j m[s<-j]
 
-    i.e. second-generation migrants occur at twice the first-generation rate,
-    matching the prior BA3 assumes (total 3m per source, hence sum m < 1/3).
+    gamma = 1 (tau = 2) is BA3's original assumption that migrants breed at the
+    resident rate; gamma < 1 means reduced migrant breeding success (fewer age-2
+    per age-1). Requires (1 + tau) * sum m < 1.
 
     age 0 -> (0, None); age 1/2 -> (age, source_pop)."""
+    tau = 2.0 * gamma
     others = [b for b in range(npop) if b != s]
     # Categorical over: native, (age1, b) for each b, (age2, b) for each b.
     labels = [(0, None)]
-    weights = [1.0 - 3.0 * m * len(others)]
+    weights = [1.0 - (1.0 + tau) * m * len(others)]
     for b in others:
         labels.append((1, b))
         weights.append(m)
     for b in others:
         labels.append((2, b))
-        weights.append(2.0 * m)
+        weights.append(tau * m)
     r = rng.random()
     cumulative = 0.0
     for (label, w) in zip(labels, weights):
@@ -107,11 +110,11 @@ def simulate(args):
     rng = random.Random(args.seed)
 
     npop = args.npop
-    # BA3 constraint: total migrant ancestry per population is 3m per source.
-    total_mig_rate = 3.0 * args.m * (npop - 1)
+    # BA3 constraint: total migrant ancestry per population is (1+tau)m per source.
+    tau = 2.0 * args.breed_mult
+    total_mig_rate = (1.0 + tau) * args.m * (npop - 1)
     if total_mig_rate >= 1.0:
-        sys.exit("Error: 3 * m * (npop - 1) = %.3f must be < 1 (so m < 1/(3*(npop-1)))."
-                 % total_mig_rate)
+        sys.exit("Error: (1 + 2*gamma) * m * (npop - 1) = %.3f must be < 1." % total_mig_rate)
 
     # Per-population allele frequencies (ALT), separately for autosomal and X.
     auto_freq = build_freqs(args.nauto, args.fst, npop, rng, args.fmin)
@@ -127,7 +130,7 @@ def simulate(args):
 
     for s in range(npop):
         for k in range(args.nind):
-            age, source = assign_ancestry(s, npop, args.m, rng)
+            age, source = assign_ancestry(s, npop, args.m, args.breed_mult, rng)
 
             # Sex assignment and the migrant's sex.
             if age == 0:
@@ -262,8 +265,10 @@ def main():
     p.add_argument("--phi", type=float, default=0.8,
                    help="female fraction of migrants (0..1); 0.5 = no sex bias")
     p.add_argument("--m", type=float, default=0.10,
-                   help="per-source migration rate m (BA3's m[i][j]); age-1 rate is "
-                        "m and age-2 rate is 2m, so m < 1/(3*(npop-1))")
+                   help="per-source movement (age-1) migration rate m (BA3's m[i][j])")
+    p.add_argument("--breed-mult", type=float, default=1.0, dest="breed_mult",
+                   help="migrant breeding-success multiplier gamma; age-2 rate is "
+                        "2*gamma*m (gamma=1 -> BA3's default 2m). Needs (1+2*gamma)*m*(npop-1) < 1")
     p.add_argument("--nauto", type=int, default=300, help="number of autosomal SNP loci")
     p.add_argument("--nx", type=int, default=150, help="number of X-linked SNP loci")
     p.add_argument("--fst", type=float, default=0.1,
@@ -278,6 +283,8 @@ def main():
                       ("--phi-breed", args.phi_breed)]:
         if val is not None and not (0.0 <= val <= 1.0):
             sys.exit("Error: %s must be in [0, 1]." % name)
+    if args.breed_mult <= 0.0:
+        sys.exit("Error: --breed-mult (gamma) must be > 0.")
 
     individuals, auto_geno, x_geno, auto_freq, x_freq = simulate(args)
 
@@ -295,7 +302,7 @@ def main():
         "params": {
             "npop": args.npop, "nind_per_pop": args.nind,
             "phi_move": phi_move, "phi_breed": phi_breed,
-            "m": args.m, "nauto": args.nauto, "nx": args.nx,
+            "m": args.m, "gamma": args.breed_mult, "nauto": args.nauto, "nx": args.nx,
             "fst": args.fst, "fmin": args.fmin, "seed": args.seed,
         },
         "summary": summary,
@@ -315,7 +322,10 @@ def main():
           "phi_breed = %.3f (empirical %.3f over %d age-2 breeders)"
           % (phi_move, summary["empirical_phi_move"], summary["n_age1_movers"],
              phi_breed, summary["empirical_phi_breed"], summary["n_age2_breeders"]))
-    print("Ancestry counts: %s" % summary["counts_by_age"])
+    counts = summary["counts_by_age"]
+    realized_gamma = (counts["age2"] / (2.0 * counts["age1"])) if counts["age1"] else float("nan")
+    print("Ancestry counts: %s  (realized gamma = age2/(2*age1) = %.3f, true %.3f)"
+          % (counts, realized_gamma, args.breed_mult))
 
 
 if __name__ == "__main__":

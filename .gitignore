@@ -4,3 +4,4 @@
 
 # Downloaded empirical datasets (large; not versioned)
 doi_*dryad*.zip
+__pycache__/

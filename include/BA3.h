@@ -120,7 +120,7 @@ void checkDataSize(unsigned int &outNoIndiv, unsigned int &outNoLoci, unsigned i
 void readInputFile(indiv *sampleIndiv, unsigned int &noIndiv, unsigned int &noLoci, unsigned int &noPopln, unsigned int *noAlleles);
 void getEmpiricalAlleleFreqs(double ***alleleFreqs, indiv *sampleIndiv, unsigned int *noAlleles, unsigned int noPopln, unsigned int noLoci, unsigned int noIndiv);
 void fillMigrantCounts(indiv *sampleIndiv, long int ***migrantCounts, unsigned int noIndiv, unsigned int noPopln);
-double migCountLogProb(long int ***migrantCounts, double **migrationRates, unsigned int noPopln);
+double migCountLogProb(long int ***migrantCounts, double **migrationRates, unsigned int noPopln, double gamma);
 double logLik(const indiv& Indiv, double ***alleleFreqs, double ***logAlleleFreqs, double *FStat, double *log1MinusFStat, unsigned int noLoci);
 double oneLocusLogLik(const indiv& Indiv, double ***alleleFreqs, double ***logAlleleFreqs, double *FStat, double *log1MinusFStat, int chosenLocus);
 void updateLogAlleleFreqs(double ***logAlleleFreqs, double ***alleleFreqs, unsigned int popln, unsigned int locus, unsigned int noAlleles);

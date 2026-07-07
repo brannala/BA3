@@ -45,6 +45,10 @@ migrant (carrying one source X and one native X) — which would make the focal 
 third-generation migrant, outside BA3's depth. At `migrantAge <= 2` every X copy
 is a whole chromosome, either all-source or all-native.
 
+BA3's original ancestry prior fixes the age-2 rate at twice the age-1 rate
+(`P(age2) = 2m`, `P(age0) = 1 - 3m`), which assumes migrants breed at the
+resident rate. This extension frees that ratio (Section 3.1).
+
 ---
 
 ## 3. Parametrization (female fractions: movement, gene flow, residents)
@@ -81,6 +85,41 @@ The baseline migration rate `M_{s<-b}` retains its usual meaning (sex-summed);
 `phiMove = rho`, `phiBreed = rho`, and `phiMove = phiBreed` (does breeding
 success differ from movement?) are Savage-Dickey density-ratio tests, analogous
 to BA3's existing `M = 0` tests.
+
+### 3.1 Migrant breeding success (movement vs gene-flow magnitude)
+
+The sex split describes the *composition* of movers vs breeders; a companion
+parameter describes their *magnitude*. Free BA3's fixed age-2:age-1 ratio with a
+global **migrant breeding-success multiplier** `gamma` (`tau = 2*gamma`):
+
+```
+P(age1 from b) = m
+P(age2 from b) = tau * m = 2*gamma * m
+P(age0)        = 1 - (1 + tau) * sum_b m
+```
+
+- `gamma = 1` (`tau = 2`) is BA3's original assumption — migrants breed at the
+  resident rate.
+- `gamma < 1`: migrants breed *less* successfully (e.g. immigrant males excluded
+  by reproductive competition / high male reproductive variance) — fewer age-2
+  per age-1.
+- `gamma > 1`: migrants breed *more* (heterosis / inbreeding avoidance).
+
+`gamma` is naturally **global (shared across populations)** because it reflects a
+species-level mating-system property, not a per-population trait. It is the
+*magnitude* twin of the sex split: with it, `m` is the **apparent / movement**
+migration rate (from age-1) and `gamma * m` is proportional to the **effective /
+gene-flow** rate (from age-2). Identified from the age-2:age-1 count ratio;
+updated by a Metropolis-Hastings move on `log(gamma)` with a weakly-informative
+log-normal prior centered at 1; feasibility requires `(1 + tau) * sum_b m < 1`.
+Reported with `P(gamma < 1)` (posterior probability of reduced migrant breeding).
+
+Together the extension yields a full movement-vs-gene-flow decomposition:
+
+| | Magnitude | Sex composition |
+|---|---|---|
+| Movement (age-1) | `m` | `phiMove` |
+| Gene flow (age-2) | `gamma * m` | `phiBreed` |
 
 ---
 
@@ -279,7 +318,12 @@ parameter update.
    ```
    The age-2 `sigma` Gibbs step uses `phiBreed` (not `phiMove`) as its prior.
 
-3. **Baseline rates `M_{s<-b}`.** Unchanged from current BA3.
+3. **Baseline rates `M_{s<-b}`.** Unchanged from current BA3, except the age-2
+   prior weight is now `2*gamma*m` and the diagonal `1-(1+2*gamma)*sum m`.
+
+3b. **Breeding-success multiplier `gamma`.** Metropolis-Hastings on `log(gamma)`
+   (Section 3.1), informed by the age-2:age-1 counts; runs whether or not sex
+   data is present.
 
 4. **Savage-Dickey tests (Rao-Blackwellized).** Because each fraction has a
    conjugate Beta full-conditional, the posterior density needed for each test is
