@@ -1013,6 +1013,11 @@ common_processing:
 
 	// Posterior mean/variance accumulators for the female fraction phi
 	double avgPhi = 0.0, varPhi = 0.0;
+	// Latest migrant-sex counts (set by the phi Gibbs update each iteration) and
+	// the Rao-Blackwellized Savage-Dickey accumulator for testing phi = 1/2.
+	long int phiCountF = 0, phiCountM = 0;
+	double sdPhiPostDensitySum = 0.0;
+	long int sdPhiNSamples = 0;
 
 	long int ***migrantCounts;
 	migrantCounts = new long int**[noPopln];
@@ -1663,6 +1668,9 @@ if (sexBiasModel)
 	phi = gsl_ran_beta(r, PHI_PRIOR_A + (double)nF, PHI_PRIOR_B + (double)nM);
 	if (phi < 1e-6) phi = 1e-6;
 	if (phi > 1.0 - 1e-6) phi = 1.0 - 1e-6;
+	// Retain the counts for the Rao-Blackwellized Savage-Dickey test of phi = 1/2.
+	phiCountF = nF;
+	phiCountM = nM;
 }
 
 // Autotune: adjust delta values during burn-in to achieve target acceptance rate
@@ -1857,6 +1865,13 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 					varPhi = ((iter - 1.0) / iter) * varPhi + d;
 				}
 				avgPhi = avgPhi + (phi - avgPhi) / (1.0 + iter);
+
+				// Rao-Blackwellized Savage-Dickey: average the exact conditional
+				// posterior density of phi at 1/2 (Beta given the current migrant
+				// sex counts), which is more accurate than a KDE.
+				sdPhiPostDensitySum += gsl_ran_beta_pdf(0.5,
+				    PHI_PRIOR_A + (double)phiCountF, PHI_PRIOR_B + (double)phiCountM);
+				sdPhiNSamples++;
 			}
 
 			for (unsigned int l = 0; l < noPopln; l++)
@@ -2019,7 +2034,8 @@ mcmcout << "\n Population Labels:\n";
 	// Output Savage-Dickey test results for zero migration hypotheses
 	computeSavageDickeyBayesFactors(sdStats, noPopln, PRIOR_DENSITY_AT_ZERO, mcmcout, poplnNames);
 
-	// Sex-biased dispersal: report the estimated female fraction of migrants.
+	// Sex-biased dispersal: report the estimated female fraction of migrants and
+	// a Savage-Dickey density ratio test of H0: phi = 1/2 (no sex bias).
 	if (sexBiasModel)
 	{
 		mcmcout.setf(std::ios::fixed, std::ios::floatfield);
@@ -2028,6 +2044,31 @@ mcmcout << "\n Population Labels:\n";
 		        << "(" << std::setprecision(4) << sqrt(varPhi) << ")\n";
 		mcmcout << "   (phi = 0.5 is no sex bias; phi > 0.5 female-biased, "
 		        << "phi < 0.5 male-biased dispersal)\n";
+
+		// Savage-Dickey Bayes factor: BF_01 = p(phi=1/2|data) / p(phi=1/2|prior).
+		// The posterior density at 1/2 is a Rao-Blackwellized average of the
+		// conjugate Beta full-conditional evaluated at 1/2.
+		double priorDensity = gsl_ran_beta_pdf(0.5, PHI_PRIOR_A, PHI_PRIOR_B);
+		double postDensity = (sdPhiNSamples > 0)
+		                     ? sdPhiPostDensitySum / (double)sdPhiNSamples : 0.0;
+		double BF01 = (priorDensity > 0.0) ? postDensity / priorDensity : 0.0;
+		double log10BF = log10(BF01 > 0.0 ? BF01 : 1e-10);
+
+		std::string interp;
+		if (log10BF > 2) interp = "Decisive for H0 (no sex bias)";
+		else if (log10BF > 1) interp = "Strong for H0 (no sex bias)";
+		else if (log10BF > 0.5) interp = "Substantial for H0 (no sex bias)";
+		else if (log10BF > 0) interp = "Weak for H0 (no sex bias)";
+		else if (log10BF > -0.5) interp = "Weak for H1 (sex bias)";
+		else if (log10BF > -1) interp = "Substantial for H1 (sex bias)";
+		else if (log10BF > -2) interp = "Strong for H1 (sex bias)";
+		else interp = "Decisive for H1 (sex bias)";
+
+		mcmcout << " Savage-Dickey test H0: phi = 0.5 (no sex bias):\n";
+		mcmcout << "   BF_01 = " << std::setprecision(3) << BF01
+		        << "  log10(BF_01) = " << std::showpos << std::setprecision(3) << log10BF
+		        << std::noshowpos << "   " << interp << "\n";
+		mcmcout << "   (BF_01 > 1 supports no sex bias; BF_01 < 1 supports sex bias)\n";
 	}
 
 	mcmcout << "\n Inbreeding Coefficients:\n";
