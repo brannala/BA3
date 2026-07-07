@@ -61,6 +61,19 @@ const int MAXLINELENGTH=1000000;
 // Use int16_t to support up to 500 alleles (values -2 to 499)
 typedef int16_t GenotypeType;
 
+// Marker stored in the second genotype slot for a hemizygous male X locus
+// (the individual carries only a single X gene copy at that locus).
+const GenotypeType HEMIZYGOUS = -3;
+
+// Individual sex (from metadata). SEX_UNKNOWN is the default when no sex
+// column is supplied, so autosomal-only datasets are unaffected.
+enum SexType { SEX_UNKNOWN = 0, SEX_FEMALE = 1, SEX_MALE = 2 };
+
+// Per-locus inheritance type, determined at read time (X-linked loci are
+// identified by an X chromosome name in the VCF CHROM field).
+enum LocusType { LOCUS_AUTOSOMAL = 0, LOCUS_XLINKED = 1 };
+extern std::vector<int> gLocusType;  // size gNoLoci; one entry per locus
+
 // Global variables for actual dataset dimensions (set after reading data)
 extern unsigned int gNoLoci;
 extern unsigned int gNoIndiv;
@@ -73,9 +86,10 @@ struct indiv
 	unsigned int samplePopln;
 	unsigned int migrantPopln;
 	unsigned int migrantAge;
+	unsigned int sex;             // SEX_UNKNOWN / SEX_FEMALE / SEX_MALE
 	double logL;
 
-	indiv() : genotype(nullptr), samplePopln(0), migrantPopln(0), migrantAge(0), logL(0.0) {}
+	indiv() : genotype(nullptr), samplePopln(0), migrantPopln(0), migrantAge(0), sex(SEX_UNKNOWN), logL(0.0) {}
 };
 
 // Memory allocation helpers
@@ -126,9 +140,11 @@ void freeSavageDickeyStats(SavageDickeyStats **sdStats, unsigned int noPopln);
 
 // VCF input functions
 void readMetadataFile(const char *metaFileName,
-                      std::map<std::string, std::string> &indivToPopln);
+                      std::map<std::string, std::string> &indivToPopln,
+                      std::map<std::string, int> &indivToSex);
 void readVCFFile(const char *vcfFileName,
                  const std::map<std::string, std::string> &indivToPopln,
+                 const std::map<std::string, int> &indivToSex,
                  indiv *sampleIndiv,
                  unsigned int &noIndiv, unsigned int &noLoci,
                  unsigned int &noPopln, unsigned int *noAlleles);

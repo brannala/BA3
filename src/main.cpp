@@ -101,6 +101,9 @@ IndivMap locusIDMap;
 // map between alleleID and allele name at each locus (dynamically allocated)
 IndivMap *alleleIDMap = nullptr;
 
+// per-locus inheritance type (0=autosomal, 1=X-linked); sized to noLoci at read time
+std::vector<int> gLocusType;
+
 // Global dataset dimensions (set after reading input file)
 unsigned int gNoLoci = 0;
 
@@ -166,10 +169,14 @@ std::vector<std::string> split(const std::string& str,
 // VCF Input Functions
 //=============================================================================
 
-// Read metadata file mapping individuals to populations
-// Format: INDIV_ID POPLN_ID (whitespace separated, one per line)
+// Read metadata file mapping individuals to populations (and optionally sex).
+// Format: INDIV_ID POPLN_ID [SEX] (whitespace separated, one per line).
+// SEX is optional; accepts F/M or female/male (case-insensitive). Individuals
+// with no sex column are left SEX_UNKNOWN, so autosomal-only, sexless datasets
+// continue to work unchanged.
 void readMetadataFile(const char *metaFileName,
-                      std::map<std::string, std::string> &indivToPopln) {
+                      std::map<std::string, std::string> &indivToPopln,
+                      std::map<std::string, int> &indivToSex) {
     std::ifstream metaFile(metaFileName);
     if (!metaFile) {
         std::cerr << "\nerror: cannot open metadata file: " << metaFileName << "\n";
@@ -184,13 +191,28 @@ void readMetadataFile(const char *metaFileName,
         if (line.empty() || line[0] == '#') continue;
 
         std::istringstream iss(line);
-        std::string indivID, poplnID;
+        std::string indivID, poplnID, sexStr;
         if (!(iss >> indivID >> poplnID)) {
             std::cerr << "\nerror: invalid format in metadata file at line " << lineNum
-                      << ": expected 'INDIV POPLN'\n";
+                      << ": expected 'INDIV POPLN [SEX]'\n";
             exit(1);
         }
         indivToPopln[indivID] = poplnID;
+
+        // Optional third column: sex
+        if (iss >> sexStr) {
+            std::string s = sexStr;
+            for (char &c : s) c = (char)tolower((unsigned char)c);
+            if (s == "f" || s == "female") {
+                indivToSex[indivID] = SEX_FEMALE;
+            } else if (s == "m" || s == "male") {
+                indivToSex[indivID] = SEX_MALE;
+            } else {
+                std::cerr << "\nerror: unrecognized sex '" << sexStr << "' in metadata file at line "
+                          << lineNum << ": expected F/M (or female/male)\n";
+                exit(1);
+            }
+        }
     }
     metaFile.close();
 
@@ -300,9 +322,20 @@ void checkVCFDataSize(const char *vcfFileName,
     gMaxAlleles = outMaxAlleles;
 }
 
+// Identify X-linked loci from the VCF CHROM field. Matches "X" or "chrX"
+// (case-insensitive); everything else is treated as autosomal.
+static bool isXLinkedChrom(const char *chrom) {
+    if (!chrom) return false;
+    std::string c(chrom);
+    for (char &ch : c) ch = (char)tolower((unsigned char)ch);
+    if (c.rfind("chr", 0) == 0) c = c.substr(3);  // strip a leading "chr"
+    return (c == "x");
+}
+
 // Read VCF file and populate genotype data
 void readVCFFile(const char *vcfFileName,
                  const std::map<std::string, std::string> &indivToPopln,
+                 const std::map<std::string, int> &indivToSex,
                  indiv *sampleIndiv,
                  unsigned int &noIndiv, unsigned int &noLoci,
                  unsigned int &noPopln, unsigned int *noAlleles) {
@@ -355,6 +388,12 @@ void readVCFFile(const char *vcfFileName,
             sampleIndiv[indivIdx].samplePopln = pID;
             sampleIndiv[indivIdx].migrantPopln = pID;
             sampleIndiv[indivIdx].migrantAge = 0;
+
+            // Sex from metadata (SEX_UNKNOWN if not provided)
+            auto sIt = indivToSex.find(sampleName);
+            sampleIndiv[indivIdx].sex = (sIt != indivToSex.end())
+                                        ? (unsigned int)sIt->second : SEX_UNKNOWN;
+
             indivIdx++;
         }
     }
@@ -368,17 +407,28 @@ void readVCFFile(const char *vcfFileName,
     int32_t *gt = NULL;
     int ngt = 0;
 
+    // Per-locus inheritance type, filled as loci are read (noLoci from the
+    // sizing pass in checkVCFDataSize).
+    gLocusType.assign(noLoci, LOCUS_AUTOSOMAL);
+
     while (bcf_read(vcfFile, hdr, rec) == 0) {
         bcf_unpack(rec, BCF_UN_ALL);
+
+        const char *chromName = bcf_hdr_id2name(hdr, rec->rid);
 
         // Create locus name from CHROM:POS or ID
         std::string locusName;
         if (rec->d.id && strcmp(rec->d.id, ".") != 0) {
             locusName = rec->d.id;
         } else {
-            locusName = std::string(bcf_hdr_id2name(hdr, rec->rid)) + ":" + std::to_string(rec->pos + 1);
+            locusName = std::string(chromName) + ":" + std::to_string(rec->pos + 1);
         }
         locusIDMap[locusName] = locusIdx;
+
+        // Classify locus as X-linked or autosomal from the CHROM field
+        bool locusIsX = isXLinkedChrom(chromName);
+        if (locusIdx < gLocusType.size())
+            gLocusType[locusIdx] = locusIsX ? LOCUS_XLINKED : LOCUS_AUTOSOMAL;
 
         // Number of alleles at this locus (REF + ALTs)
         noAlleles[locusIdx] = rec->n_allele;
@@ -398,18 +448,23 @@ void readVCFFile(const char *vcfFileName,
                 sampleIndiv[i].genotype[locusIdx][1] = -1;
             }
         } else {
-            int ploidy = ngt_ret / nSamples;
+            // Max ploidy across samples for this record; individual samples may
+            // be haploid, in which case their second slot is a vector-end marker
+            // (e.g. hemizygous males at an X-linked locus).
+            int maxPloidy = ngt_ret / nSamples;
 
             for (int s = 0; s < nSamples; s++) {
                 int indIdx = sampleToIndiv[s];
                 if (indIdx < 0) continue;  // Skip samples not in metadata
 
-                int32_t *ptr = gt + s * ploidy;
+                int32_t *ptr = gt + s * maxPloidy;
 
-                // Handle diploid genotypes
-                if (ploidy >= 2) {
+                // Is a real second gene copy present for this sample?
+                bool diploidCall = (maxPloidy >= 2) &&
+                                   (ptr[1] != bcf_int32_vector_end);
+
+                if (diploidCall) {
                     if (bcf_gt_is_missing(ptr[0]) || bcf_gt_is_missing(ptr[1])) {
-                        // Missing genotype
                         sampleIndiv[indIdx].genotype[locusIdx][0] = -1;
                         sampleIndiv[indIdx].genotype[locusIdx][1] = -1;
                     } else {
@@ -420,14 +475,17 @@ void readVCFFile(const char *vcfFileName,
                         sampleIndiv[indIdx].genotype[locusIdx][1] = a1;
                     }
                 } else {
-                    // Haploid - treat as homozygous
+                    // Single gene copy for this sample at this locus.
                     if (bcf_gt_is_missing(ptr[0])) {
                         sampleIndiv[indIdx].genotype[locusIdx][0] = -1;
                         sampleIndiv[indIdx].genotype[locusIdx][1] = -1;
                     } else {
                         int a0 = bcf_gt_allele(ptr[0]);
                         sampleIndiv[indIdx].genotype[locusIdx][0] = a0;
-                        sampleIndiv[indIdx].genotype[locusIdx][1] = a0;
+                        // Hemizygous on X (true single copy); otherwise a haploid
+                        // call on a non-X locus is treated as homozygous, as before.
+                        sampleIndiv[indIdx].genotype[locusIdx][1] =
+                            locusIsX ? HEMIZYGOUS : (GenotypeType)a0;
                     }
                 }
             }
@@ -602,6 +660,7 @@ int main( int argc, char *argv[] )
 
 	/* get input file name or validate VCF options */
 	std::map<std::string, std::string> indivToPopln;  // For VCF mode
+	std::map<std::string, int> indivToSex;            // For VCF mode (optional sex column)
 
 	if (gArgs.useVCF) {
 		// VCF mode - validate required options
@@ -675,7 +734,7 @@ int main( int argc, char *argv[] )
 	// Read input data - either VCF or standard BA3 format
 	if (gArgs.useVCF) {
 		// VCF input mode
-		readMetadataFile(gArgs.metaFileName, indivToPopln);
+		readMetadataFile(gArgs.metaFileName, indivToPopln, indivToSex);
 
 		// First pass: determine dataset dimensions
 		checkVCFDataSize(gArgs.vcfFileName, indivToPopln, noIndiv, noLoci, noPopln, maxAlleles);
@@ -693,7 +752,7 @@ int main( int argc, char *argv[] )
 		allocateGenotypes(sampleIndiv, noIndiv, noLoci);
 
 		// Second pass: read the VCF data
-		readVCFFile(gArgs.vcfFileName, indivToPopln, sampleIndiv, noIndiv, noLoci, noPopln, noAlleles);
+		readVCFFile(gArgs.vcfFileName, indivToPopln, indivToSex, sampleIndiv, noIndiv, noLoci, noPopln, noAlleles);
 
 		// Update maxAlleles from actual data
 		for (unsigned int l = 0; l < noLoci; l++) {
@@ -738,6 +797,11 @@ int main( int argc, char *argv[] )
 	gMaxAlleles = maxAlleles;
 
 common_processing:
+
+	// Ensure per-locus type is sized (native text input has no X annotation, so
+	// all loci are autosomal; the VCF path has already filled this).
+	if (gLocusType.size() != noLoci)
+		gLocusType.assign(noLoci, LOCUS_AUTOSOMAL);
 
 	double ***ancP;
 	if((ancP = new double**[noIndiv])==0) cerr << "ran out of memory";
@@ -805,7 +869,32 @@ common_processing:
 		cout << "\nInput file: " << infileName;
 		cout << "\nOutput file: " << gArgs.outfileName << "\n";
 		cout << "Individuals: " << noIndiv << " Populations: " << noPopln << " Loci: " << noLoci;
-		cout << " Missing genotypes: " << noMissingGenotypes << "\n\n";
+		cout << " Missing genotypes: " << noMissingGenotypes << "\n";
+
+		// Report parsed sex and X-linked / hemizygous data (sex-biased dispersal)
+		{
+			unsigned int nFemale = 0, nMale = 0, nUnknownSex = 0;
+			for (unsigned int i = 0; i < noIndiv; i++)
+			{
+				if (sampleIndiv[i].sex == SEX_FEMALE) nFemale++;
+				else if (sampleIndiv[i].sex == SEX_MALE) nMale++;
+				else nUnknownSex++;
+			}
+			unsigned int nXLoci = 0;
+			for (unsigned int l = 0; l < noLoci; l++)
+				if (l < gLocusType.size() && gLocusType[l] == LOCUS_XLINKED) nXLoci++;
+			long int nHemizygous = 0;
+			for (unsigned int i = 0; i < noIndiv; i++)
+				for (unsigned int l = 0; l < noLoci; l++)
+					if (sampleIndiv[i].genotype[l][1] == HEMIZYGOUS) nHemizygous++;
+
+			cout << "Sex: " << nFemale << " female, " << nMale << " male";
+			if (nUnknownSex) cout << ", " << nUnknownSex << " unspecified";
+			cout << "\n";
+			cout << "Loci: " << (noLoci - nXLoci) << " autosomal, " << nXLoci
+			     << " X-linked; hemizygous male-X genotypes: " << nHemizygous << "\n";
+		}
+		cout << "\n";
 		cout << "Locus:(Number of Alleles)\n";
 		for(unsigned int l=0; l<noLoci; l++)
 		{
@@ -2607,7 +2696,12 @@ double logLik(const indiv& Indiv, double ***alleleFreqs, double ***logAlleleFreq
 			const int a0 = geno[i][0];
 			const int a1 = geno[i][1];
 
-			if (a0 == a1)
+			if (a1 == HEMIZYGOUS)
+			{
+				// Hemizygous male X (single gene copy) from the sampled population
+				logPr += logFreqPop[i][a0];
+			}
+			else if (a0 == a1)
 			{
 				// Homozygote: use original formula with direct allele freqs
 				const double p = freqPop[i][a0];
@@ -2635,7 +2729,12 @@ double logLik(const indiv& Indiv, double ***alleleFreqs, double ***logAlleleFreq
 			const int a0 = geno[i][0];
 			const int a1 = geno[i][1];
 
-			if (a0 == a1)
+			if (a1 == HEMIZYGOUS)
+			{
+				// Hemizygous male X (single gene copy) from the source population
+				logPr += logFreqPop[i][a0];
+			}
+			else if (a0 == a1)
 			{
 				const double p = freqPop[i][a0];
 				logPr += log(oneMinusF * p * p + F * p);
@@ -2659,7 +2758,17 @@ double logLik(const indiv& Indiv, double ***alleleFreqs, double ***logAlleleFreq
 			const int a0 = geno[i][0];
 			const int a1 = geno[i][1];
 
-			if (a0 == a1)
+			if (a1 == HEMIZYGOUS)
+			{
+				// Hemizygous male X (single gene copy). Marginalizing over the
+				// migrant parent's sex gives 1/2 (source + native):
+				// log(0.5 * (p_mig + p_sam)) via log-sum-exp.
+				const double t1 = logFreqMig[i][a0];
+				const double t2 = logFreqSam[i][a0];
+				const double mx = (t1 > t2) ? t1 : t2;
+				logPr += mx + log(exp(t1 - mx) + exp(t2 - mx)) - LOG2;
+			}
+			else if (a0 == a1)
 			{
 				// Homozygote: log(p_mig * p_sample) = log(p_mig) + log(p_sample)
 				logPr += logFreqMig[i][a0] + logFreqSam[i][a1];
@@ -2683,6 +2792,24 @@ double oneLocusLogLik(const indiv& Indiv, double ***alleleFreqs, double ***logAl
 	double logPr = 0.0;
 	const int a0 = Indiv.genotype[chosenLocus][0];
 	const int a1 = Indiv.genotype[chosenLocus][1];
+
+	if (a1 == HEMIZYGOUS)
+	{
+		// Hemizygous male X (single gene copy)
+		if (Indiv.migrantAge == 0)
+			logPr = logAlleleFreqs[Indiv.samplePopln][chosenLocus][a0];
+		else if (Indiv.migrantAge == 1)
+			logPr = logAlleleFreqs[Indiv.migrantPopln][chosenLocus][a0];
+		else
+		{
+			// age 2: marginalize migrant parent sex -> 1/2 (source + native)
+			const double t1 = logAlleleFreqs[Indiv.migrantPopln][chosenLocus][a0];
+			const double t2 = logAlleleFreqs[Indiv.samplePopln][chosenLocus][a0];
+			const double mx = (t1 > t2) ? t1 : t2;
+			logPr = mx + log(exp(t1 - mx) + exp(t2 - mx)) - LOG2;
+		}
+		return logPr;
+	}
 
 	if (Indiv.migrantAge == 0)
 	{
