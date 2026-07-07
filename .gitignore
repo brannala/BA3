@@ -1,3 +1,6 @@
 /BA3
 /main.o
 /BA3.dSYM/
+
+# Downloaded empirical datasets (large; not versioned)
+doi_*dryad*.zip

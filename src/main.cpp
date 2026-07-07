@@ -883,9 +883,12 @@ common_processing:
 	// Sex-biased dispersal model setup. Active only when sex metadata was
 	// supplied (indivToSex non-empty). Requires complete sex information.
 	bool sexBiasModel = !indivToSex.empty();
-	double phi = 0.5;                 // female fraction of migrants (dispersers)
+	// Sex ratios (female fractions): movement dispersal (age-1 migrants), effective
+	// gene flow (age-2 migrant parents = migrants that also bred), and residents.
+	double phiMove = 0.5;             // female fraction of age-1 migrants (movement)
+	double phiBreed = 0.5;            // female fraction of age-2 migrant parents (gene flow)
 	double rho = 0.5;                 // female fraction of residents (non-dispersers)
-	std::vector<unsigned int> xLoci;  // indices of X-linked loci (for phi/sigma updates)
+	std::vector<unsigned int> xLoci;  // indices of X-linked loci (for phiBreed/sigma updates)
 	if (sexBiasModel)
 	{
 		for (unsigned int i = 0; i < noIndiv; i++)
@@ -1026,17 +1029,20 @@ common_processing:
 		for (unsigned int j = 0; j < noPopln; j++)
 			varMigrationRates[i][j]=0.0;
 
-	// Posterior accumulators for the migrant (phi) and resident (rho) female
-	// fractions, their difference, and the Savage-Dickey tests.
-	double avgPhi = 0.0, varPhi = 0.0;
+	// Posterior accumulators for the movement (phiMove), gene-flow (phiBreed), and
+	// resident (rho) female fractions, plus the Savage-Dickey tests.
+	double avgMove = 0.0, varMove = 0.0;
+	double avgBreed = 0.0, varBreed = 0.0;
 	double avgRho = 0.0, varRho = 0.0;
-	double avgPhiMinusRho = 0.0, varPhiMinusRho = 0.0;
-	long int phiGtRhoCount = 0;         // count of samples with phi > rho
+	long int moveGtRhoCount = 0, breedGtRhoCount = 0;   // P(phi > rho) counters
 	// Latest sex counts (set by the Gibbs update each iteration).
-	long int phiCountF = 0, phiCountM = 0;   // migrants (dispersers)
-	long int rhoCountF = 0, rhoCountM = 0;   // residents (non-dispersers)
-	double sdPhiPostDensitySum = 0.0;   // RB Savage-Dickey for phi = 1/2
-	double sdPhiEqRhoOverlapSum = 0.0;  // RB Savage-Dickey for phi = rho
+	long int moveCountF = 0, moveCountM = 0;    // age-1 migrants (movement)
+	long int breedCountF = 0, breedCountM = 0;  // age-2 migrant parents (gene flow)
+	long int rhoCountF = 0, rhoCountM = 0;      // residents (non-dispersers)
+	// RB Savage-Dickey overlap accumulators for the three equality nulls.
+	double sdMoveEqRhoSum = 0.0;    // H0: phiMove  = rho
+	double sdBreedEqRhoSum = 0.0;   // H0: phiBreed = rho
+	double sdMoveEqBreedSum = 0.0;  // H0: phiMove  = phiBreed
 	long int sdPhiNSamples = 0;
 
 	long int ***migrantCounts;
@@ -1242,17 +1248,18 @@ if(!NOANCMCMC)
 			if (tempIndiv.migrantAge == 1)
 				tempIndiv.migrantSex = tempIndiv.sex;
 			else if (tempIndiv.migrantAge == 2)
-				tempIndiv.migrantSex = (gsl_rng_uniform(r) < phi) ? SEX_FEMALE : SEX_MALE;
+				tempIndiv.migrantSex = (gsl_rng_uniform(r) < phiBreed) ? SEX_FEMALE : SEX_MALE;
 			else
 				tempIndiv.migrantSex = SEX_UNKNOWN;
 
 			// After the sigma prior/proposal cancellation, the residual per-
-			// individual sex term is: age-1 own sex ~ phi (disperser); age-0/age-2
-			// own sex ~ rho (resident). The age-2 latent sigma factor cancels.
+			// individual sex term is: age-1 own sex ~ phiMove (disperser/mover);
+			// age-0/age-2 own sex ~ rho (resident). The age-2 latent sigma factor
+			// (drawn from phiBreed) cancels.
 			bool obsFemale = (sampleIndiv[chosenIndiv].sex == SEX_FEMALE);
 			auto sexTerm = [&](unsigned int age)->double {
 				if (age == 1)
-					return obsFemale ? log(phi) : log(1.0 - phi);
+					return obsFemale ? log(phiMove) : log(1.0 - phiMove);
 				return obsFemale ? log(rho) : log(1.0 - rho);
 			};
 			dtLogSex = sexTerm(tempIndiv.migrantAge) - sexTerm(sampleIndiv[chosenIndiv].migrantAge);
@@ -1638,8 +1645,9 @@ if(!NOMISSINGDATA)
 // rho counts non-dispersers (own sex of age-0 and age-2 individuals).
 if (sexBiasModel)
 {
-	long int nF = 0, nM = 0;   // migrants (dispersers)
-	long int rF = 0, rM = 0;   // residents (non-dispersers)
+	long int moveF = 0, moveM = 0;    // age-1 migrants (movement)
+	long int breedF = 0, breedM = 0;  // age-2 migrant parents (effective gene flow)
+	long int rF = 0, rM = 0;          // residents (non-dispersers)
 	for (unsigned int m = 0; m < noIndiv; m++)
 	{
 		unsigned int age = sampleIndiv[m].migrantAge;
@@ -1650,14 +1658,15 @@ if (sexBiasModel)
 		}
 		else if (age == 1)
 		{
-			// First-generation migrant: migrant sex = individual's observed sex.
+			// First-generation migrant (a mover): its observed sex informs phiMove.
 			sampleIndiv[m].migrantSex = sampleIndiv[m].sex;
-			if (sampleIndiv[m].sex == SEX_FEMALE) nF++; else nM++;
+			if (sampleIndiv[m].sex == SEX_FEMALE) moveF++; else moveM++;
 		}
 		else if (age == 2)
 		{
-			// A 2nd-gen individual is itself locally born (a non-disperser), so its
-			// own sex informs rho; its migrant parent's sex (sigma) informs phi.
+			// A 2nd-gen individual is itself locally born (own sex -> rho); its
+			// migrant parent bred successfully, so the parent's sex (sigma) informs
+			// phiBreed (effective gene flow).
 			if (sampleIndiv[m].sex == SEX_FEMALE) rF++; else rM++;
 			unsigned int newSigma;
 			if (sampleIndiv[m].sex == SEX_MALE && !xLoci.empty())
@@ -1667,7 +1676,7 @@ if (sexBiasModel)
 				// if the father (sigma = M). Gibbs from the posterior log-odds.
 				const unsigned int src = sampleIndiv[m].migrantPopln;
 				const unsigned int nat = sampleIndiv[m].samplePopln;
-				double logOdds = log(phi) - log(1.0 - phi);   // prior log-odds F:M
+				double logOdds = log(phiBreed) - log(1.0 - phiBreed);  // prior log-odds F:M
 				for (size_t xi = 0; xi < xLoci.size(); xi++)
 				{
 					unsigned int l = xLoci[xi];
@@ -1682,7 +1691,7 @@ if (sexBiasModel)
 			else
 			{
 				// Female (or no X loci): sigma has no likelihood effect -> prior.
-				newSigma = (gsl_rng_uniform(r) < phi) ? SEX_FEMALE : SEX_MALE;
+				newSigma = (gsl_rng_uniform(r) < phiBreed) ? SEX_FEMALE : SEX_MALE;
 			}
 			if (newSigma != sampleIndiv[m].migrantSex)
 			{
@@ -1692,18 +1701,20 @@ if (sexBiasModel)
 					sampleIndiv[m].logL = logLik(sampleIndiv[m], alleleFreqs, logAlleleFreqs,
 					                             FStat, log1MinusFStat, noLoci);
 			}
-			if (sampleIndiv[m].migrantSex == SEX_FEMALE) nF++; else nM++;
+			if (sampleIndiv[m].migrantSex == SEX_FEMALE) breedF++; else breedM++;
 		}
 	}
-	// Beta-Bernoulli conjugate updates of phi (migrants) and rho (residents),
-	// then clamp away from 0/1.
-	phi = gsl_ran_beta(r, PHI_PRIOR_A + (double)nF, PHI_PRIOR_B + (double)nM);
-	rho = gsl_ran_beta(r, PHI_PRIOR_A + (double)rF, PHI_PRIOR_B + (double)rM);
-	if (phi < 1e-6) phi = 1e-6;  if (phi > 1.0 - 1e-6) phi = 1.0 - 1e-6;
-	if (rho < 1e-6) rho = 1e-6;  if (rho > 1.0 - 1e-6) rho = 1.0 - 1e-6;
-	// Retain the counts for the Rao-Blackwellized Savage-Dickey tests.
-	phiCountF = nF;  phiCountM = nM;
-	rhoCountF = rF;  rhoCountM = rM;
+	// Beta-Bernoulli conjugate updates of phiMove, phiBreed, and rho; clamp.
+	phiMove  = gsl_ran_beta(r, PHI_PRIOR_A + (double)moveF,  PHI_PRIOR_B + (double)moveM);
+	phiBreed = gsl_ran_beta(r, PHI_PRIOR_A + (double)breedF, PHI_PRIOR_B + (double)breedM);
+	rho      = gsl_ran_beta(r, PHI_PRIOR_A + (double)rF,     PHI_PRIOR_B + (double)rM);
+	if (phiMove  < 1e-6) phiMove  = 1e-6;  if (phiMove  > 1.0-1e-6) phiMove  = 1.0-1e-6;
+	if (phiBreed < 1e-6) phiBreed = 1e-6;  if (phiBreed > 1.0-1e-6) phiBreed = 1.0-1e-6;
+	if (rho      < 1e-6) rho      = 1e-6;  if (rho      > 1.0-1e-6) rho      = 1.0-1e-6;
+	// Retain counts for the Rao-Blackwellized Savage-Dickey tests.
+	moveCountF = moveF;   moveCountM = moveM;
+	breedCountF = breedF; breedCountM = breedM;
+	rhoCountF = rF;       rhoCountM = rM;
 }
 
 // Autotune: adjust delta values during burn-in to achieve target acceptance rate
@@ -1889,30 +1900,30 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 			// Update Savage-Dickey statistics for migration rate hypothesis testing
 			updateSavageDickeyStats(sdStats, migrationRates, noPopln, SD_BANDWIDTH);
 
-			// Accumulate posteriors for phi (migrants), rho (residents), their
-			// difference, and the two Savage-Dickey tests.
+			// Accumulate posteriors for phiMove (movement), phiBreed (gene flow),
+			// rho (residents), and the three Savage-Dickey equality tests.
 			if (sexBiasModel)
 			{
-				double diff = phi - rho;
 				if (iter > 1)
 				{
-					varPhi          = ((iter-1.0)/iter)*varPhi          + (phi - avgPhi)*(phi - avgPhi)/(iter+1.0);
-					varRho          = ((iter-1.0)/iter)*varRho          + (rho - avgRho)*(rho - avgRho)/(iter+1.0);
-					varPhiMinusRho  = ((iter-1.0)/iter)*varPhiMinusRho  + (diff - avgPhiMinusRho)*(diff - avgPhiMinusRho)/(iter+1.0);
+					varMove  = ((iter-1.0)/iter)*varMove  + (phiMove  - avgMove )*(phiMove  - avgMove )/(iter+1.0);
+					varBreed = ((iter-1.0)/iter)*varBreed + (phiBreed - avgBreed)*(phiBreed - avgBreed)/(iter+1.0);
+					varRho   = ((iter-1.0)/iter)*varRho   + (rho      - avgRho  )*(rho      - avgRho  )/(iter+1.0);
 				}
-				avgPhi         = avgPhi         + (phi  - avgPhi)/(1.0+iter);
-				avgRho         = avgRho         + (rho  - avgRho)/(1.0+iter);
-				avgPhiMinusRho = avgPhiMinusRho + (diff - avgPhiMinusRho)/(1.0+iter);
-				if (phi > rho) phiGtRhoCount++;
+				avgMove  = avgMove  + (phiMove  - avgMove )/(1.0+iter);
+				avgBreed = avgBreed + (phiBreed - avgBreed)/(1.0+iter);
+				avgRho   = avgRho   + (rho      - avgRho  )/(1.0+iter);
+				if (phiMove  > rho) moveGtRhoCount++;
+				if (phiBreed > rho) breedGtRhoCount++;
 
-				// Rao-Blackwellized Savage-Dickey densities from the conjugate Beta
-				// full-conditionals (more accurate than a KDE):
-				//   H0: phi = 1/2  -> Beta density of phi at 1/2
-				//   H0: phi = rho  -> density of (phi-rho) at 0 = overlap integral
-				double aPhi = PHI_PRIOR_A + (double)phiCountF, bPhi = PHI_PRIOR_B + (double)phiCountM;
-				double aRho = PHI_PRIOR_A + (double)rhoCountF, bRho = PHI_PRIOR_B + (double)rhoCountM;
-				sdPhiPostDensitySum  += gsl_ran_beta_pdf(0.5, aPhi, bPhi);
-				sdPhiEqRhoOverlapSum += betaProductIntegral(aPhi, bPhi, aRho, bRho);
+				// Rao-Blackwellized Savage-Dickey: density of a difference at 0 equals
+				// the overlap integral of the two conjugate Beta full-conditionals.
+				double aMv = PHI_PRIOR_A + (double)moveCountF,  bMv = PHI_PRIOR_B + (double)moveCountM;
+				double aBr = PHI_PRIOR_A + (double)breedCountF, bBr = PHI_PRIOR_B + (double)breedCountM;
+				double aRh = PHI_PRIOR_A + (double)rhoCountF,   bRh = PHI_PRIOR_B + (double)rhoCountM;
+				sdMoveEqRhoSum   += betaProductIntegral(aMv, bMv, aRh, bRh);
+				sdBreedEqRhoSum  += betaProductIntegral(aBr, bBr, aRh, bRh);
+				sdMoveEqBreedSum += betaProductIntegral(aMv, bMv, aBr, bBr);
 				sdPhiNSamples++;
 			}
 
@@ -2076,10 +2087,11 @@ mcmcout << "\n Population Labels:\n";
 	// Output Savage-Dickey test results for zero migration hypotheses
 	computeSavageDickeyBayesFactors(sdStats, noPopln, PRIOR_DENSITY_AT_ZERO, mcmcout, poplnNames);
 
-	// Sex-biased dispersal: report the female fractions of migrants (phi) and
-	// residents (rho), their difference, and Savage-Dickey tests. The dispersal
-	// sex bias is phi vs rho (not phi vs 1/2), which controls for the population
-	// sex ratio; phi vs 1/2 is reported as a secondary reference.
+	// Sex-biased dispersal: report the female fractions for movement (phiMove,
+	// age-1 migrants), effective gene flow (phiBreed, age-2 migrant parents), and
+	// residents (rho), plus Savage-Dickey tests of each bias against rho and of
+	// movement vs gene flow. Bias is measured against rho (the population sex
+	// ratio), not 1/2. The X-linked data specifically informs phiBreed.
 	if (sexBiasModel)
 	{
 		auto interpret = [](double log10BF, const char *h0lab, const char *h1lab) {
@@ -2091,32 +2103,34 @@ mcmcout << "\n Population Labels:\n";
 				strength = (log10BF<-2)?"Decisive":(log10BF<-1)?"Strong":(log10BF<-0.5)?"Substantial":"Weak"; }
 			o << strength << " for " << lab; return o.str();
 		};
-		double priorPhi = gsl_ran_beta_pdf(0.5, PHI_PRIOR_A, PHI_PRIOR_B);
-		double priorEq  = betaProductIntegral(PHI_PRIOR_A, PHI_PRIOR_B, PHI_PRIOR_A, PHI_PRIOR_B);
+		double priorEq = betaProductIntegral(PHI_PRIOR_A, PHI_PRIOR_B, PHI_PRIOR_A, PHI_PRIOR_B);
 		double n = (sdPhiNSamples > 0) ? (double)sdPhiNSamples : 1.0;
-		double bfPhiHalf = (sdPhiPostDensitySum / n) / priorPhi;                 // H0: phi = 1/2
-		double bfPhiRho  = (sdPhiEqRhoOverlapSum / n) / priorEq;                 // H0: phi = rho
-		double l10Half = log10(bfPhiHalf > 0 ? bfPhiHalf : 1e-10);
-		double l10Rho  = log10(bfPhiRho  > 0 ? bfPhiRho  : 1e-10);
-		double pFemaleBias = (double)phiGtRhoCount / n;
+		double bfMoveRho  = (sdMoveEqRhoSum  / n) / priorEq;   // H0: phiMove  = rho
+		double bfBreedRho = (sdBreedEqRhoSum / n) / priorEq;   // H0: phiBreed = rho
+		double bfMoveBreed= (sdMoveEqBreedSum/ n) / priorEq;   // H0: phiMove  = phiBreed
+		double l10MoveRho  = log10(bfMoveRho  > 0 ? bfMoveRho  : 1e-10);
+		double l10BreedRho = log10(bfBreedRho > 0 ? bfBreedRho : 1e-10);
+		double l10MoveBreed= log10(bfMoveBreed> 0 ? bfMoveBreed: 1e-10);
 
 		mcmcout.setf(std::ios::fixed, std::ios::floatfield);
-		mcmcout << "\n Sex-biased dispersal:\n";
-		mcmcout << "   Female fraction of migrants,  phi = " << std::setprecision(4) << avgPhi
-		        << "(" << sqrt(varPhi) << ")\n";
-		mcmcout << "   Female fraction of residents, rho = " << std::setprecision(4) << avgRho
+		mcmcout << "\n Sex-biased dispersal (female fractions; compared to residents rho):\n";
+		mcmcout << "   rho      residents (non-dispersers)     = " << std::setprecision(4) << avgRho
 		        << "(" << sqrt(varRho) << ")\n";
-		mcmcout << "   phi - rho = " << std::setprecision(4) << avgPhiMinusRho
-		        << "(" << sqrt(varPhiMinusRho) << ")   P(phi > rho) = "
-		        << std::setprecision(3) << pFemaleBias << "\n";
-		mcmcout << "   Savage-Dickey H0: phi = rho (no sex-biased dispersal):\n";
-		mcmcout << "     BF_01 = " << std::setprecision(3) << bfPhiRho
-		        << "  log10(BF_01) = " << std::showpos << l10Rho << std::noshowpos
-		        << "   " << interpret(l10Rho, "H0 (no sex bias)", "H1 (sex-biased dispersal)") << "\n";
-		mcmcout << "   (phi > rho: female-biased; phi < rho: male-biased dispersal)\n";
-		mcmcout << "   Reference H0: phi = 0.5 (ignores population sex ratio): BF_01 = "
-		        << std::setprecision(3) << bfPhiHalf << ", log10 = "
-		        << std::showpos << l10Half << std::noshowpos << "\n";
+		mcmcout << "   phiMove  age-1 migrants (movement)      = " << std::setprecision(4) << avgMove
+		        << "(" << sqrt(varMove) << ")   P(>rho) = " << std::setprecision(3) << (double)moveGtRhoCount/n << "\n";
+		mcmcout << "   phiBreed age-2 migrant parents (gene flow) = " << std::setprecision(4) << avgBreed
+		        << "(" << sqrt(varBreed) << ")   P(>rho) = " << std::setprecision(3) << (double)breedGtRhoCount/n << "\n";
+		mcmcout << "   (phi > rho: female-biased; phi < rho: male-biased. The X data informs phiBreed.)\n";
+		mcmcout << "   Savage-Dickey tests (BF_01; <1 supports the alternative):\n";
+		mcmcout << "     H0: phiMove  = rho (no sex-biased movement)  : BF_01 = " << std::setprecision(3) << bfMoveRho
+		        << "  log10 = " << std::showpos << l10MoveRho << std::noshowpos
+		        << "   " << interpret(l10MoveRho, "H0", "sex-biased movement") << "\n";
+		mcmcout << "     H0: phiBreed = rho (no sex-biased gene flow) : BF_01 = " << std::setprecision(3) << bfBreedRho
+		        << "  log10 = " << std::showpos << l10BreedRho << std::noshowpos
+		        << "   " << interpret(l10BreedRho, "H0", "sex-biased gene flow") << "\n";
+		mcmcout << "     H0: phiMove  = phiBreed (movement = gene flow): BF_01 = " << std::setprecision(3) << bfMoveBreed
+		        << "  log10 = " << std::showpos << l10MoveBreed << std::noshowpos
+		        << "   " << interpret(l10MoveBreed, "H0", "movement differs from gene flow") << "\n";
 	}
 
 	mcmcout << "\n Inbreeding Coefficients:\n";
