@@ -121,6 +121,10 @@ def simulate(args):
     auto_geno = []        # auto_geno[i] = list of (a0, a1) over autosomal loci
     x_geno = []           # x_geno[i]    = list of (a0, a1) (female) or (a0,) (male)
 
+    # Movement vs gene-flow sex ratios (fall back to --phi if not given).
+    phi_move = args.phi_move if args.phi_move is not None else args.phi
+    phi_breed = args.phi_breed if args.phi_breed is not None else args.phi
+
     for s in range(npop):
         for k in range(args.nind):
             age, source = assign_ancestry(s, npop, args.m, rng)
@@ -130,12 +134,12 @@ def simulate(args):
                 sex = "F" if rng.random() < 0.5 else "M"
                 migrant_sex = None
             elif age == 1:
-                # The sampled individual IS the migrant.
-                migrant_sex = "F" if rng.random() < args.phi else "M"
+                # The sampled individual IS the (first-gen) migrant that moved.
+                migrant_sex = "F" if rng.random() < phi_move else "M"
                 sex = migrant_sex
-            else:  # age == 2
+            else:  # age == 2: the migrant PARENT bred (effective gene flow)
                 sex = "F" if rng.random() < 0.5 else "M"
-                migrant_sex = "F" if rng.random() < args.phi else "M"
+                migrant_sex = "F" if rng.random() < phi_breed else "M"
 
             sid = "pop%d_%d" % (s, k)
             individuals.append({
@@ -223,24 +227,27 @@ def write_metadata(path, individuals):
 
 
 def summarize(individuals):
-    """Empirical checks: realized female fraction among first-gen migrants and
-    per-category counts."""
-    n_fg_female = n_fg_male = 0
+    """Empirical checks: realized female fractions for movement (age-1 migrants),
+    gene flow (age-2 migrant parents), and residents; per-category counts."""
+    move_f = move_m = breed_f = breed_m = res_f = res_m = 0
     counts = {"age0": 0, "age1": 0, "age2": 0}
     for ind in individuals:
         counts["age%d" % ind["age"]] += 1
-        if ind["migrant_sex"] == "F":
-            n_fg_female += 1
-        elif ind["migrant_sex"] == "M":
-            n_fg_male += 1
-    total_mig = n_fg_female + n_fg_male
-    emp_phi = (n_fg_female / total_mig) if total_mig else float("nan")
+        if ind["age"] == 1:
+            move_f += ind["migrant_sex"] == "F"; move_m += ind["migrant_sex"] == "M"
+        elif ind["age"] == 2:
+            breed_f += ind["migrant_sex"] == "F"; breed_m += ind["migrant_sex"] == "M"
+            res_f += ind["sex"] == "F"; res_m += ind["sex"] == "M"
+        else:  # age 0 residents
+            res_f += ind["sex"] == "F"; res_m += ind["sex"] == "M"
+    frac = lambda a, b: (a / (a + b)) if (a + b) else float("nan")
     return {
         "counts_by_age": counts,
-        "n_migrant_lineages": total_mig,
-        "n_first_gen_migrant_female": n_fg_female,
-        "n_first_gen_migrant_male": n_fg_male,
-        "empirical_phi": emp_phi,
+        "n_age1_movers": move_f + move_m,
+        "n_age2_breeders": breed_f + breed_m,
+        "empirical_phi_move": frac(move_f, move_m),
+        "empirical_phi_breed": frac(breed_f, breed_m),
+        "empirical_rho": frac(res_f, res_m),
     }
 
 
@@ -248,6 +255,10 @@ def main():
     p = argparse.ArgumentParser(description="Simulate sex-biased dispersal data for BA3 testing.")
     p.add_argument("--npop", type=int, default=2, help="number of populations")
     p.add_argument("--nind", type=int, default=60, help="individuals per population")
+    p.add_argument("--phi-move", type=float, default=None, dest="phi_move",
+                   help="female fraction of age-1 migrants (movement); defaults to --phi")
+    p.add_argument("--phi-breed", type=float, default=None, dest="phi_breed",
+                   help="female fraction of age-2 migrant parents (gene flow); defaults to --phi")
     p.add_argument("--phi", type=float, default=0.8,
                    help="female fraction of migrants (0..1); 0.5 = no sex bias")
     p.add_argument("--m", type=float, default=0.10,
@@ -263,8 +274,10 @@ def main():
     p.add_argument("--out", type=str, default="sim_run", help="output file prefix")
     args = p.parse_args()
 
-    if not (0.0 <= args.phi <= 1.0):
-        sys.exit("Error: --phi must be in [0, 1].")
+    for name, val in [("--phi", args.phi), ("--phi-move", args.phi_move),
+                      ("--phi-breed", args.phi_breed)]:
+        if val is not None and not (0.0 <= val <= 1.0):
+            sys.exit("Error: %s must be in [0, 1]." % name)
 
     individuals, auto_geno, x_geno, auto_freq, x_freq = simulate(args)
 
@@ -275,10 +288,13 @@ def main():
     write_vcf(vcf_path, individuals, auto_geno, x_geno, args.nauto, args.nx)
     write_metadata(meta_path, individuals)
 
+    phi_move = args.phi_move if args.phi_move is not None else args.phi
+    phi_breed = args.phi_breed if args.phi_breed is not None else args.phi
     summary = summarize(individuals)
     truth = {
         "params": {
-            "npop": args.npop, "nind_per_pop": args.nind, "phi": args.phi,
+            "npop": args.npop, "nind_per_pop": args.nind,
+            "phi_move": phi_move, "phi_breed": phi_breed,
             "m": args.m, "nauto": args.nauto, "nx": args.nx,
             "fst": args.fst, "fmin": args.fmin, "seed": args.seed,
         },
@@ -295,8 +311,10 @@ def main():
           % (vcf_path, args.nauto, args.nx, len(individuals)))
     print("  %s" % meta_path)
     print("  %s" % truth_path)
-    print("Ground truth: phi = %.3f  (empirical among %d migrant lineages: %.3f)"
-          % (args.phi, summary["n_migrant_lineages"], summary["empirical_phi"]))
+    print("Ground truth: phi_move = %.3f (empirical %.3f over %d age-1 movers), "
+          "phi_breed = %.3f (empirical %.3f over %d age-2 breeders)"
+          % (phi_move, summary["empirical_phi_move"], summary["n_age1_movers"],
+             phi_breed, summary["empirical_phi_breed"], summary["n_age2_breeders"]))
     print("Ancestry counts: %s" % summary["counts_by_age"])
 
 

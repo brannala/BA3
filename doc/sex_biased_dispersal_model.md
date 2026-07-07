@@ -11,16 +11,19 @@ keeping BA3's existing two-generation ancestry depth (`migrantAge` 0, 1, 2).
 
 BA3 currently estimates a single directional migration rate `M_{s<-b}` (fraction
 of population `s` that is migrant-derived from source `b` per generation). This
-extension splits each rate by the **sex of the dispersing (first-generation)
-migrant** and infers a single global **dispersal sex-bias**, while retaining all
-standard BA3 assumptions (HWE within populations, constant allele frequencies,
-unlinked loci, inbreeding coefficient `F` per population) and BA3's existing
-ancestry depth.
+extension infers the **sex bias of dispersal** from autosomal + X-linked markers
+with per-individual sex, distinguishing three global female fractions — movement
+(`phiMove`), effective gene flow (`phiBreed`), and the resident baseline (`rho`)
+— while retaining all standard BA3 assumptions (HWE within populations, constant
+allele frequencies, unlinked loci, inbreeding coefficient `F` per population) and
+BA3's existing ancestry depth.
 
 The signal comes from **X-linked inheritance being sex-asymmetric**: a male
 transmits his single X only to daughters, and a second-generation individual's X
 therefore records whether its migrant parent was the mother or the father. This
-lets the data inform the sex composition of migrants.
+lets the data inform the sex composition of migrants — and, because a
+second-generation individual exists only if its migrant parent *bred*, it
+separates who *moves* from who actually contributes *genes* (Section 3).
 
 ---
 
@@ -44,32 +47,40 @@ is a whole chromosome, either all-source or all-native.
 
 ---
 
-## 3. Parametrization (female-fraction form)
+## 3. Parametrization (female fractions: movement, gene flow, residents)
 
-Split each baseline rate `M_{s<-b}` by the sex of the first-generation migrant
-using **one global female fraction** `phi in (0,1)`:
+The sex bias of dispersal is described by **global female fractions** rather than
+a fixed 50:50 assumption. Three quantities are inferred:
 
-```
-M_{s<-b}^female = M_{s<-b} * phi
-M_{s<-b}^male   = M_{s<-b} * (1 - phi)
-```
+- `phiMove in (0,1)`  = female fraction of **age-1 migrants** (individuals that
+  **moved**; a mover may or may not breed) — *movement dispersal*.
+- `phiBreed in (0,1)` = female fraction of **age-2 migrant parents** (migrants
+  that moved **and bred**, since an age-2 individual only exists because its
+  migrant parent reproduced) — *effective gene flow*.
+- `rho in (0,1)`      = female fraction of **residents** (non-dispersers: the own
+  sex of age-0 and age-2 individuals) — the *population sex ratio* baseline.
 
-Interpretation:
+**Movement vs gene flow.** `phiMove` and `phiBreed` are distinct because
+migration is not gene flow: a first-generation migrant that fails to breed (e.g.
+a male excluded by reproductive competition / high male reproductive variance)
+contributes movement but no genes. `phiBreed` is the population-genetically
+meaningful quantity, and — because a male's single X comes from his mother — the
+**X-linked data specifically informs `phiBreed`** (via the age-2 male
+migrant-parent sex). `phiMove` is informed by the observed sexes of age-1
+migrants.
 
-- `phi` = fraction of migrants that are female (global, shared across all pairs
-  and directions).
-- `phi > 1/2` female-biased dispersal, `phi < 1/2` male-biased, `phi = 1/2` no bias.
-- The sex-summed rate is preserved: `M^female + M^male = M_{s<-b}`, so **every
-  `M_{s<-b}` keeps its current meaning**, BA3's feasibility constraint
-  `sum_{b != s} M_{s<-b} <= 1` is unchanged, and existing priors/output formats
-  carry over. (This is why the fraction is preferred over a multiplicative ratio,
-  which would inflate the row sums and couple the bias into the constraint.)
-- Bias ratio for reporting: `r = phi / (1 - phi)`.
+**Bias is measured against `rho`, not 1/2.** Comparing a migrant fraction to a
+fixed 1/2 conflates dispersal sex bias with the population/sampling sex ratio.
+The dispersal sex bias is therefore `phi vs rho`: `phi > rho` female-biased,
+`phi < rho` male-biased, `phi = rho` no bias. Inferring `rho` from non-migrants
+controls for a skewed population or sex-biased sampling (as long as the skew is
+the same for residents and migrants).
 
-**Parameter count:** for `P` populations, `2 P(P-1)` sex-specific rates collapse
-to `P(P-1) + 1` (the `M`'s plus `phi`). For 2 populations: 4 -> 3. Testing
-`phi = 1/2` (no sex bias) is a Savage-Dickey density-ratio test, directly
-analogous to BA3's existing `M = 0` tests.
+The baseline migration rate `M_{s<-b}` retains its usual meaning (sex-summed);
+`phiMove`/`phiBreed` split the migrant sexes at each generation. Testing
+`phiMove = rho`, `phiBreed = rho`, and `phiMove = phiBreed` (does breeding
+success differ from movement?) are Savage-Dickey density-ratio tests, analogous
+to BA3's existing `M = 0` tests.
 
 ---
 
@@ -251,27 +262,32 @@ BA3 samples explicit per-individual migrant ancestry (`proposeMigrantAncDrop` /
 `proposeMigrantAncAdd`). The extension adds the `sigma` label and one global
 parameter update.
 
-1. **Ancestry + sex moves.** For `migrantAge = 2`, extend the proposals to also
-   draw `sigma in {F, M}`, scored by `W` and the X/autosomal likelihood. For
-   `migrantAge = 1`, `sigma = g_i` is fixed. For females at `migrantAge = 2` the
-   X likelihood does not depend on `sigma`, so `sigma` is updated by its prior
-   (Gibbs from `phi`) there.
+1. **Ancestry + sex moves.** For `migrantAge = 2`, the proposal also draws
+   `sigma in {F, M}` from its prior `Bernoulli(phiBreed)` (so the sigma prior and
+   proposal densities cancel in the MH ratio), scored by the X/autosomal
+   likelihood. For `migrantAge = 1`, `sigma = g_i` is fixed. The residual per-
+   individual sex term added to the MH ratio is `log(phiMove)` (age-1 own sex) or
+   `log(rho)` (age-0 / age-2 own sex).
 
-2. **Female fraction `phi` — conjugate Gibbs.** Each migrant-ancestry individual
-   contributes one Bernoulli(`phi`) observation: the sex of its first-generation
-   migrant (the focal's own sex at `migrantAge = 1`; the migrant parent's sex at
-   `migrantAge = 2`). With a `Beta(a0, b0)` prior:
+2. **Female fractions — conjugate Gibbs.** With a `Beta(a0, b0)` prior
+   (`a0 = b0 = 1` uniform), each is updated from Bernoulli counts of the relevant
+   sexes:
    ```
-   phi | . ~ Beta(a0 + N_F, b0 + N_M)
+   phiMove  | . ~ Beta(a0 + age1_F,   b0 + age1_M)     # age-1 migrant own sexes
+   phiBreed | . ~ Beta(a0 + age2sig_F, b0 + age2sig_M)  # age-2 migrant-parent sexes
+   rho      | . ~ Beta(a0 + res_F,     b0 + res_M)      # age-0 + age-2 own sexes
    ```
-   where `N_F` / `N_M` = number of individuals whose current first-generation
-   migrant is female / male. Default `a0 = b0 = 1` (uniform).
+   The age-2 `sigma` Gibbs step uses `phiBreed` (not `phiMove`) as its prior.
 
-3. **Baseline rates `M_{s<-b}`.** Unchanged from current BA3 — the sex split
-   enters only through `W`, and the constraint `sum_b M_{s<-b} <= 1` is untouched.
+3. **Baseline rates `M_{s<-b}`.** Unchanged from current BA3.
 
-4. **Savage-Dickey test for `phi = 1/2`.** Reuse the existing density-ratio
-   machinery to report a Bayes factor for no sex bias.
+4. **Savage-Dickey tests (Rao-Blackwellized).** Because each fraction has a
+   conjugate Beta full-conditional, the posterior density needed for each test is
+   the average of the conjugate density over MCMC samples (more accurate than a
+   KDE). The density of a difference at 0 is the overlap integral of the two
+   Beta full-conditionals. Reported nulls: `phiMove = rho` (sex-biased movement),
+   `phiBreed = rho` (sex-biased gene flow), `phiMove = phiBreed` (movement differs
+   from gene flow).
 
 Monitor acceptance rates for the ancestry/sex moves in the usual 20-60% window.
 
@@ -279,13 +295,20 @@ Monitor acceptance rates for the ancestry/sex moves in the usual 20-60% window.
 
 ## 11. Identifiability
 
-- `phi` is informed most directly by the **observed sexes of first-generation
-  migrants** (`migrantAge = 1`); this works even with autosomes only.
-- X-linked markers add power through **second-generation males**, whose whole-X
-  ancestry (source vs. native) reads the migrant parent's sex outright.
-- Second-generation **females** contribute no sex-of-migrant information from the
-  X. Without X-linked loci, `phi` is identified solely from `migrantAge = 1`
-  migrant sexes — usable but weaker; the X markers (via 2nd-gen males) sharpen it.
+- `phiMove` is informed by the **observed sexes of first-generation migrants**
+  (`migrantAge = 1`); it needs no X data.
+- `phiBreed` is informed by **second-generation males**, whose whole-X ancestry
+  (source vs. native) reads the migrant parent's sex outright — so `phiBreed`
+  effectively requires X-linked loci. Second-generation **females** contribute no
+  sex-of-migrant information from the X.
+- `rho` is informed by the observed sexes of residents (age-0 and age-2).
+- **Caveat (X/autosome discordance).** Age classification (age-0/1/2) uses the
+  whole genome including the X. If X and autosomal ancestry are discordant for
+  reasons *other* than recent sex-biased gene flow (e.g. deep sex-specific
+  demography, lower X `Ne`), that discordance can be misread as `phiBreed` bias
+  and can even shift which individuals are called age-1 vs age-2 (contaminating
+  `phiMove`). Comparing the full model to an **autosome-only** run isolates the
+  movement signal and diagnoses such discordance.
 
 ---
 

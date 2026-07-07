@@ -59,15 +59,20 @@ def parse_migration_matrix(lines):
     return matrix
 
 
-def parse_phi(lines):
-    """Find an estimated phi line: any line mentioning 'phi' with a
-    NUMBER(SD) token. Returns (mean, sd) or None."""
+def parse_sexbias(lines):
+    """Parse the sex-biased dispersal block. Each parameter line begins with the
+    parameter name (rho / phiMove / phiBreed). Returns {name: (mean, sd)}."""
+    out = {}
     for line in lines:
-        if "phi" in line.lower():
+        toks = line.strip().split()
+        if not toks:
+            continue
+        key = toks[0]
+        if key in ("rho", "phiMove", "phiBreed") and key not in out:
             m = EST_RE.search(line)
             if m:
-                return (float(m.group(1)), float(m.group(2)))
-    return None
+                out[key] = (float(m.group(1)), float(m.group(2)))
+    return out
 
 
 def realized_migration(truth):
@@ -108,11 +113,11 @@ def main():
         sys.exit("Error opening BA3 output '%s': %s" % (args.ba3out, e))
 
     matrix = parse_migration_matrix(lines)
-    phi_est = parse_phi(lines)
+    sexbias = parse_sexbias(lines)
     m_real, native_frac = realized_migration(truth)
     npop = truth["params"]["npop"]
 
-    report = {"migration": [], "phi": None, "pass": True}
+    report = {"migration": [], "sexbias": {}, "pass": True}
 
     print("=" * 64)
     print("BA3 recovery vs ground truth")
@@ -148,28 +153,33 @@ def main():
             else:
                 print("  %-8s %-14s %-14.4f  (no estimate)" % ("%d<-%d" % (i, j), "-", realized))
 
-    # ---- dispersal sex bias phi ----
-    true_phi = truth["params"]["phi"]
-    emp_phi = truth["summary"]["empirical_phi"]
-    print("\nDispersal sex bias phi (female fraction of migrants):")
-    print("  true phi           = %.4f" % true_phi)
-    print("  empirical phi      = %.4f  (over %d migrant lineages)"
-          % (emp_phi, truth["summary"]["n_migrant_lineages"]))
-    if phi_est is None:
-        print("  BA3 estimate       = (not found in %s)" % args.ba3out)
-        print("    [expected a line like: 'Dispersal female fraction phi: 0.79(0.03)']")
-    else:
-        mean, sd = phi_est
-        z_true = (true_phi - mean) / sd if sd > 0 else float("inf")
-        z_emp = (emp_phi - mean) / sd if sd > 0 else float("inf")
-        ok = abs(z_true) <= args.tol
-        report["pass"] = report["pass"] and ok
-        report["phi"] = {"ba3_mean": mean, "ba3_sd": sd, "true": true_phi,
-                         "empirical": emp_phi, "z_true": z_true, "z_emp": z_emp,
-                         "within_tol": ok}
-        print("  BA3 estimate       = %.4f(%.4f)" % (mean, sd))
-        print("  z vs true = %.2f   z vs empirical = %.2f   within tol: %s"
-              % (z_true, z_emp, "yes" if ok else "NO"))
+    # ---- dispersal sex bias: phiMove (movement), phiBreed (gene flow), rho ----
+    prm = truth["params"]
+    smry = truth["summary"]
+    targets = [
+        ("phiMove",  prm.get("phi_move"),  smry.get("empirical_phi_move"),  "movement (age-1)"),
+        ("phiBreed", prm.get("phi_breed"), smry.get("empirical_phi_breed"), "gene flow (age-2)"),
+        ("rho",      None,                 smry.get("empirical_rho"),       "residents"),
+    ]
+    print("\nSex-biased dispersal  (female fractions):")
+    print("  %-9s %-16s %-10s %-8s %s" % ("param", "BA3 mean(SD)", "target", "z", "within tol"))
+    for key, true_val, emp_val, label in targets:
+        target = true_val if true_val is not None else emp_val  # rho has no input param
+        est = sexbias.get(key)
+        if est is None:
+            print("  %-9s (not found in output)   [%s]" % (key, label))
+            continue
+        mean, sd = est
+        z = (target - mean) / sd if (target is not None and sd > 0) else float("nan")
+        ok = (target is None) or abs(z) <= args.tol
+        if true_val is not None:
+            report["pass"] = report["pass"] and ok
+        report["sexbias"][key] = {"ba3_mean": mean, "ba3_sd": sd, "target": target,
+                                  "z": z, "within_tol": ok, "label": label}
+        tstr = ("%.4f" % target) if target is not None else "-"
+        print("  %-9s %-16s %-10s %-8.2f %s   [%s]"
+              % (key, "%.4f(%.4f)" % (mean, sd), tstr, z,
+                 "yes" if ok else "NO", label))
 
     print("\n" + "-" * 64)
     print("OVERALL: %s" % ("PASS" if report["pass"] else "FAIL"))
