@@ -44,6 +44,7 @@ struct globalArgs {
 	int debug;
 	int nolikelihood;
 	int autotune;
+	int collapse;            // integrate out allele frequencies (collapsed sampler); default off
 	int useVCF;              // Use VCF input format
 	char vcfFileName[256];   // VCF file path
 	char metaFileName[256];  // Metadata file path (INDIV POPLN)
@@ -51,7 +52,7 @@ struct globalArgs {
 	char freqFileName[256];  // Allele frequencies file path
 } gArgs;
 
-static const char *optString = "s:i:n:b:o:m:a:f:V:M:F:vugtdphTN?";
+static const char *optString = "s:i:n:b:o:m:a:f:V:M:F:cvugtdphTN?";
 
 static const struct option longOpts[] = {
 	{ "seed", required_argument, NULL, 's' },
@@ -74,6 +75,7 @@ static const struct option longOpts[] = {
 	{ "nolikelihood", no_argument, NULL, 'p'},
 	{ "autotune", no_argument, NULL, 'T'},
 	{ "noautotune", no_argument, NULL, 'N'},
+	{ "collapse", no_argument, NULL, 'c'},
 	{ NULL, no_argument, NULL, 0 }
 };
 
@@ -163,6 +165,12 @@ const double PHI_PRIOR_B = 1.0;
 // in migrant breeding success); GAMMA_PROP_SD scales the log-scale random walk.
 const double GAMMA_PRIOR_LOGSD = 1.0;
 const double GAMMA_PROP_SD = 0.15;
+
+// Collapsed sampler: symmetric Dirichlet concentration on population allele
+// frequencies when they are integrated out analytically (Dirichlet-multinomial).
+// alpha = 1 reproduces BA3's current implicit uniform prior. See
+// doc/collapsed_allele_freqs_plan.md.
+const double ALLELE_PRIOR_ALPHA = 1.0;
 
 // Integral over [0,1] of the product of two Beta densities (midpoint rule).
 // Used for the Rao-Blackwellized Savage-Dickey test of H0: phi = rho, since the
@@ -560,6 +568,7 @@ int main( int argc, char *argv[] )
 	gArgs.debug = 0;
 	gArgs.nolikelihood=0;
 	gArgs.autotune = 1;  // autotune enabled by default
+	gArgs.collapse = 0;  // collapsed (integrated-frequency) sampler off by default
 	gArgs.usingOutfile = 1;
 	gArgs.useVCF = 0;
 	gArgs.vcfFileName[0] = '\0';
@@ -637,6 +646,10 @@ int main( int argc, char *argv[] )
 				gArgs.autotune = 0;
 				break;
 
+			case 'c':
+				gArgs.collapse = 1;
+				break;
+
 			case 'V':
 				strncpy(gArgs.vcfFileName, optarg, sizeof(gArgs.vcfFileName) - 1);
 				gArgs.vcfFileName[sizeof(gArgs.vcfFileName) - 1] = '\0';
@@ -669,6 +682,7 @@ int main( int argc, char *argv[] )
 				std::cout << "  MCMC options:\n";
 				std::cout << "    -T, --autotune    auto-tune mixing parameters during burn-in (default)\n";
 				std::cout << "    -N, --noautotune  disable auto-tuning of mixing parameters\n";
+				std::cout << "    -c, --collapse    integrate out allele frequencies (under development)\n";
 				exit(0);
 
 			case '?':
@@ -682,6 +696,13 @@ int main( int argc, char *argv[] )
 
 		opt = getopt_long( argc, argv, optString, longOpts, &longIndex );
 	}
+
+	// The collapsed (integrated-allele-frequency) sampler is under development
+	// (see doc/collapsed_allele_freqs_plan.md). Phase 0 wires up the flag only;
+	// no code path branches on it yet, so it is inert for now.
+	if (gArgs.collapse)
+		std::cerr << "\nnote: --collapse requested; the integrated-frequency sampler "
+		             "is under development and not yet active (using the standard sampler).\n";
 
 	/* get input file name or validate VCF options */
 	std::map<std::string, std::string> indivToPopln;  // For VCF mode
