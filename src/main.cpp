@@ -46,6 +46,7 @@ struct globalArgs {
 	int autotune;
 	int collapse;            // integrate out allele frequencies (collapsed sampler); default off
 	int fixGamma;            // fix gamma = 1 (original BayesAss: tau=2, migration cap 1/3); default off
+	int ss;                  // stepping-stone marginal-likelihood (model evidence); default off
 	int useVCF;              // Use VCF input format
 	char vcfFileName[256];   // VCF file path
 	char metaFileName[256];  // Metadata file path (INDIV POPLN)
@@ -53,7 +54,7 @@ struct globalArgs {
 	char freqFileName[256];  // Allele frequencies file path
 } gArgs;
 
-static const char *optString = "s:i:n:b:o:m:a:f:V:M:F:cGvugtdphTN?";
+static const char *optString = "s:i:n:b:o:m:a:f:V:M:F:cGSvugtdphTN?";
 
 static const struct option longOpts[] = {
 	{ "seed", required_argument, NULL, 's' },
@@ -78,6 +79,7 @@ static const struct option longOpts[] = {
 	{ "noautotune", no_argument, NULL, 'N'},
 	{ "collapse", no_argument, NULL, 'c'},
 	{ "fixgamma", no_argument, NULL, 'G'},
+	{ "ss", no_argument, NULL, 'S'},
 	{ NULL, no_argument, NULL, 0 }
 };
 
@@ -952,6 +954,42 @@ static void inbreedingUpdate(long ***cnt, long **cntN, indiv *ind, unsigned char
 		FStat[p] = gsl_ran_beta(r, 1.0 + (double) zSum[p], 1.0 + (double)(zTrials[p] - zSum[p]));
 }
 
+// --- Stepping-stone marginal-likelihood estimation (--ss) ---
+// Power the genotype likelihood by beta along a schedule beta_k = (k/K)^(1/alpha)
+// (Xie, Lewis, Fan, Kuo & Chen 2011), k=0..K, K=SS_RUNGS rungs. Run the collapsed
+// MCMC at each rung's power; accumulate per rung an online log-sum-exp of
+// (beta_{k+1}-beta_k)*logL over that rung's sampled genotype log-likelihoods.
+// log evidence = sum_k [ log-mean-exp_k ]. ssBeta multiplies the genotype-
+// likelihood term in the ancestry MH ratio (priors stay at power 1).
+const int SS_RUNGS = 16;
+const double SS_ALPHA = 0.3;
+double ssBeta = 1.0;                 // current power (1.0 when not in --ss mode)
+double ssBetaSched[SS_RUNGS + 1];    // beta_0 = 0 .. beta_K = 1
+double ssMax[SS_RUNGS];              // online LSE state per rung
+double ssSum[SS_RUNGS];
+long   ssN[SS_RUNGS];
+static void ssInit()
+{
+	for (int k = 0; k <= SS_RUNGS; k++)
+		ssBetaSched[k] = pow((double) k / SS_RUNGS, 1.0 / SS_ALPHA);   // 0 .. 1
+	for (int k = 0; k < SS_RUNGS; k++) { ssMax[k] = 0.0; ssSum[k] = 0.0; ssN[k] = 0; }
+}
+static void ssAccum(int rung, double logL)   // add (beta_{k+1}-beta_k)*logL to rung k
+{
+	double x = (ssBetaSched[rung + 1] - ssBetaSched[rung]) * logL;
+	if (ssN[rung] == 0) { ssMax[rung] = x; ssSum[rung] = 1.0; ssN[rung] = 1; return; }
+	if (x > ssMax[rung]) { ssSum[rung] = ssSum[rung] * exp(ssMax[rung] - x) + 1.0; ssMax[rung] = x; }
+	else ssSum[rung] += exp(x - ssMax[rung]);
+	ssN[rung]++;
+}
+static double ssEvidence()   // log marginal likelihood = sum_k log-mean-exp_k
+{
+	double lp = 0.0;
+	for (int k = 0; k < SS_RUNGS; k++)
+		if (ssN[k] > 0) lp += ssMax[k] + log(ssSum[k]) - log((double) ssN[k]);
+	return lp;
+}
+
 int main( int argc, char *argv[] )
 {
 
@@ -985,6 +1023,7 @@ int main( int argc, char *argv[] )
 	gArgs.autotune = 1;  // autotune enabled by default
 	gArgs.collapse = 0;  // collapsed (integrated-frequency) sampler off by default
 	gArgs.fixGamma = 0;  // estimate gamma by default; --fixgamma pins gamma=1
+	gArgs.ss = 0;        // stepping-stone evidence off by default
 	gArgs.usingOutfile = 1;
 	gArgs.useVCF = 0;
 	gArgs.vcfFileName[0] = '\0';
@@ -1068,6 +1107,10 @@ int main( int argc, char *argv[] )
 
 			case 'G':
 				gArgs.fixGamma = 1;
+				break;
+
+			case 'S':
+				gArgs.ss = 1;
 				break;
 
 			case 'V':
@@ -1618,6 +1661,15 @@ common_processing:
 	long ***gCount = nullptr;
 	long **gCountN = nullptr;
 	unsigned char **gAssign = nullptr;
+	// Stepping-stone evidence runs on the collapsed model with inbreeding disabled
+	// (F=0), so the genotype likelihood is exactly collapsedLogLik(counts).
+	if (gArgs.ss)
+	{
+		gArgs.collapse = 1;
+		NOFSTATMCMC = true;
+		for (unsigned int p = 0; p < noPopln; p++) FStat[p] = 0.0;
+		ssInit();
+	}
 	if(gArgs.collapse)
 	{
 		gCount = new long**[noPopln];
@@ -1743,7 +1795,17 @@ common_processing:
 		double logLprop;
 		double dtLogL;
 
-
+		// Stepping-stone: split the run into SS_RUNGS rungs; iteration i sits in
+		// rung r at power ssBeta = betaSched[r], with a per-rung burn-in.
+		int ssRung = 0; unsigned long ssIterInRung = 0, ssRungLen = 0, ssRungBurn = 0;
+		if (gArgs.ss)
+		{
+			ssRungLen = mciter / SS_RUNGS; if (ssRungLen < 1) ssRungLen = 1;
+			ssRung = (int)((i - 1) / ssRungLen); if (ssRung >= SS_RUNGS) ssRung = SS_RUNGS - 1;
+			ssIterInRung = (i - 1) % ssRungLen;
+			ssRungBurn = (unsigned long)(0.4 * ssRungLen);
+			ssBeta = ssBetaSched[ssRung];
+		}
 
 if(!NOANCMCMC)
 {
@@ -1893,7 +1955,7 @@ if(!NOANCMCMC)
 		// Acceptance-rejection step
 		alpha = gsl_rng_uniform(r);
 		if(!NOLIKELIHOOD)
-			logPrMHR = dtLogPrCount + dtLogL + logHastings + dtLogSex;
+			logPrMHR = dtLogPrCount + ssBeta*dtLogL + logHastings + dtLogSex;   // ssBeta=1 unless --ss
 		else
 			logPrMHR = dtLogPrCount + logHastings + dtLogSex;
 
@@ -2541,6 +2603,11 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 
 
 
+		// Stepping-stone: record the genotype log-likelihood of post-burn-in
+		// samples in the current rung (ssBeta path).
+		if (gArgs.ss && ssIterInRung >= ssRungBurn && (ssIterInRung % gArgs.sampling) == 0)
+			ssAccum(ssRung, collapsedLogLik(gCount, gCountN, noPopln, noLoci, noAlleles, ALLELE_PRIOR_ALPHA));
+
 		if(((i % gArgs.sampling)==0)&&(i > gArgs.burnin))
 		{
 			double sqrDiffMean=0.0;
@@ -2676,6 +2743,19 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 		iter+=1;
 		}
 }
+
+	// Stepping-stone marginal likelihood (log evidence) of the collapsed model.
+	if (gArgs.ss)
+	{
+		double logEv = ssEvidence();
+		std::cout << "\n Stepping-stone log marginal likelihood = "
+		          << std::setprecision(6) << logEv << "  (" << SS_RUNGS
+		          << " rungs, collapsed model, F=0)\n"
+		          << "   For an over-splitting test, compare this to the same run with two\n"
+		          << "   populations merged; log BF = logEv(K pops) - logEv(K-1 pops).\n";
+		mcmcout << "\nStepping-stone log marginal likelihood = " << logEv
+		        << " (" << SS_RUNGS << " rungs, F=0)\n";
+	}
 
 	// Free heap-allocated MCMC arrays
 	delete[] logLOrig;
