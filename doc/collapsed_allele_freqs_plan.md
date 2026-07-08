@@ -207,6 +207,30 @@ and the collapsed ancestry move adds a ~3*O(L) penalty (extra loci-passes). Net
 as N/P exceeds the ancestry penalty (~4). With `-u` (no inbreeding) the O((N/P)*L)
 term drops out and the advantage reverts toward the pure-N frequency term.
 
+### Scaling in N at fixed L
+
+Why the speedup grows with N: the collapsed run time is *nearly* N-independent,
+while the standard run time is ~linear in N. Base model (no sex), L = 100 loci,
+2 populations, 150k iterations, varying total N:
+
+| N | Collapse | Standard | std/col |
+|---|---|---|---|
+| 50 | 0.78 s | 2.16 s | 2.8x |
+| 100 | 0.85 s | 5.07 s | 6.0x |
+| 200 | 1.00 s | 11.9 s | 11.9x |
+| 400 | 1.27 s | 26.6 s | 20.9x |
+
+Collapse moves only 0.78 -> 1.27 s while N grows 8x: it fits `t ~= 0.71 + 0.0014*N`
+-- a constant O(L) core (the one-individual ancestry move plus the inbreeding sweep
+thinned to O(L) amortized) plus a *weak* linear-N tail from `fillMigrantCounts`
+(O(N) per accepted ancestry move), sample-point sums over individuals, and (when
+enabled) the O(N) phi/rho Gibbs tally. So the collapsed run time is **not strictly
+independent of N, but only weakly dependent** (constant + small*N). The standard run
+time is ~linear in N (its O(N) frequency MCMC and O((N/P)*L) F-stat MCMC), so the
+ratio -- the speedup -- grows roughly linearly with N (2.8x at N=50 to 21x at
+N=400). This is the same mechanism behind the dataset table above: the bear set
+(N=36) sees a small speedup because standard's N-linear costs are still small there.
+
 ## Mixing (effective sample size)
 
 Wall-clock speed is only half the story: the collapsed chain also *mixes* better,
