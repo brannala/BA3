@@ -48,16 +48,22 @@ def main():
     out = subprocess.run([ba3, '-V', vcf, '-M', meta, '-c', '-i', '200', '-b', '50',
                           '-n', '25', '-o', '/tmp/_collapse_check.txt'],
                          capture_output=True, text=True).stdout
-    m = re.search(r'collapsed init logL.*?:\s*(-?[0-9.]+)', out)
+    m = re.search(r'collapsed init logL.*?:\s*(-?[0-9.eE+]+)', out)
     if not m:
         sys.exit("FAIL: BA3 did not report a collapsed init logL (is --collapse wired up?)")
     ba3_val = float(m.group(1))
     ref = independent_dirmult(vcf, meta)
     diff = abs(ba3_val - ref)
-    print("BA3 collapsed init logL : %.4f" % ba3_val)
-    print("independent computation : %.4f" % ref)
-    print("|diff| = %.6f  ->  %s" % (diff, "PASS" if diff < 0.01 else "FAIL"))
-    sys.exit(0 if diff < 0.01 else 1)
+    ok = diff < 0.01
+    print("Phase 1 (marginal):  BA3 %.4f vs independent %.4f   |diff|=%.6f  -> %s"
+          % (ba3_val, ref, diff, "PASS" if ok else "FAIL"))
+
+    # Phase 2 gate (incremental engine), reported by BA3 itself
+    g = re.search(r'Phase-2 gate:.*->\s*(PASS|FAIL)', out)
+    if g:
+        print("Phase 2 (incremental): %s" % g.group(0).split('->')[0].strip())
+        ok = ok and (g.group(1) == "PASS")
+    sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":

@@ -586,6 +586,79 @@ static double collapsedLogLik(long ***cnt, long **cntN, unsigned int noPopln,
 	return lp;
 }
 
+// --- Incremental engine (Phase 2). O(1) per gene copy, no lgamma. ---
+// Probability factor of adding one copy of allele a to cell (p,l): the amount by
+// which the marginal changes is log of this (evaluated on the pre-add counts).
+static inline double addRatio(long ***cnt, long **cntN, unsigned int p,
+                              unsigned int l, int a, unsigned int A, double alpha)
+{
+	return (cnt[p][l][a] + alpha) / (cntN[p][l] + A * alpha);
+}
+static inline void addCopy(long ***cnt, long **cntN, unsigned int p, unsigned int l, int a)
+{ cnt[p][l][a]++; cntN[p][l]++; }
+static inline void removeCopy(long ***cnt, long **cntN, unsigned int p, unsigned int l, int a)
+{ cnt[p][l][a]--; cntN[p][l]--; }
+
+// Population an individual's gene copies are drawn from for age 0 (native) and
+// age 1 (migrant). Age 2 (one copy from each population, with a latent phase) is
+// handled in Phase 3.
+static inline unsigned int copyPop(const indiv& ind)
+{ return (ind.migrantAge == 1) ? ind.migrantPopln : ind.samplePopln; }
+
+// Change in the collapsed log-marginal from ADDING individual i's gene copies
+// under its current ancestry, given the current (without-i) counts. Copies to
+// the same cell are added sequentially (so the ratio sees the incremented
+// count); the counts are mutated then restored, so this is read-only.
+static double computeAddLogProb(long ***cnt, long **cntN, const indiv& ind,
+                                unsigned int noLoci, unsigned int *noAlleles, double alpha)
+{
+	unsigned int p = copyPop(ind);
+	const GenotypeType (*g)[2] = ind.genotype;
+	double dl = 0.0;
+	for (unsigned int l = 0; l < noLoci; l++)
+	{
+		unsigned int A = noAlleles[l]; if (A == 0) continue;
+		int a0 = g[l][0], a1 = g[l][1];
+		if (a0 >= 0) { dl += log(addRatio(cnt, cntN, p, l, a0, A, alpha)); addCopy(cnt, cntN, p, l, a0); }
+		if (a1 >= 0) { dl += log(addRatio(cnt, cntN, p, l, a1, A, alpha)); addCopy(cnt, cntN, p, l, a1); }
+	}
+	for (unsigned int l = 0; l < noLoci; l++)   // restore
+	{
+		int a0 = g[l][0], a1 = g[l][1];
+		if (a1 >= 0) removeCopy(cnt, cntN, p, l, a1);
+		if (a0 >= 0) removeCopy(cnt, cntN, p, l, a0);
+	}
+	return dl;
+}
+
+// Permanently remove / add individual i's gene copies (age 0/1).
+static void removeIndividual(long ***cnt, long **cntN, const indiv& ind, unsigned int noLoci)
+{
+	unsigned int p = copyPop(ind);
+	const GenotypeType (*g)[2] = ind.genotype;
+	for (unsigned int l = 0; l < noLoci; l++)
+	{
+		int a0 = g[l][0], a1 = g[l][1];
+		if (a0 >= 0) removeCopy(cnt, cntN, p, l, a0);
+		if (a1 >= 0) removeCopy(cnt, cntN, p, l, a1);
+	}
+}
+static double addIndividual(long ***cnt, long **cntN, const indiv& ind,
+                            unsigned int noLoci, unsigned int *noAlleles, double alpha)
+{
+	unsigned int p = copyPop(ind);
+	const GenotypeType (*g)[2] = ind.genotype;
+	double dl = 0.0;
+	for (unsigned int l = 0; l < noLoci; l++)
+	{
+		unsigned int A = noAlleles[l]; if (A == 0) continue;
+		int a0 = g[l][0], a1 = g[l][1];
+		if (a0 >= 0) { dl += log(addRatio(cnt, cntN, p, l, a0, A, alpha)); addCopy(cnt, cntN, p, l, a0); }
+		if (a1 >= 0) { dl += log(addRatio(cnt, cntN, p, l, a1, A, alpha)); addCopy(cnt, cntN, p, l, a1); }
+	}
+	return dl;
+}
+
 int main( int argc, char *argv[] )
 {
 
@@ -1226,6 +1299,29 @@ common_processing:
 		double cll = collapsedLogLik(cnt, cntN, noPopln, noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
 		std::cout << "collapsed init logL (Dirichlet-multinomial, alpha="
 		          << ALLELE_PRIOR_ALPHA << "): " << std::setprecision(8) << cll << "\n";
+
+		// Phase-2 gate: for each individual, remove it and check that
+		// computeAddLogProb equals the full-recompute marginal difference; then
+		// add it back and confirm the counts (and marginal) are restored exactly.
+		{
+			double base = cll, maxDiff = 0.0;
+			unsigned int cap = noIndiv < 200 ? noIndiv : 200;   // bound the O(P*L) recomputes
+			for(unsigned int i = 0; i < cap; i++)
+			{
+				removeIndividual(cnt, cntN, sampleIndiv[i], noLoci);
+				double without = collapsedLogLik(cnt, cntN, noPopln, noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
+				double dadd = computeAddLogProb(cnt, cntN, sampleIndiv[i], noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
+				double d = std::fabs(base - (without + dadd));
+				if(d > maxDiff) maxDiff = d;
+				addIndividual(cnt, cntN, sampleIndiv[i], noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
+			}
+			double restored = collapsedLogLik(cnt, cntN, noPopln, noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
+			std::cout << "collapsed Phase-2 gate: max|addLogProb - recompute| = "
+			          << std::scientific << maxDiff << ", restored logL diff = "
+			          << std::fabs(restored - base) << std::fixed
+			          << "  -> " << ((maxDiff < 1e-6 && std::fabs(restored - base) < 1e-6) ? "PASS" : "FAIL")
+			          << "\n";
+		}
 		for(unsigned int p = 0; p < noPopln; p++)
 		{
 			for(unsigned int l = 0; l < noLoci; l++) delete[] cnt[p][l];
