@@ -103,14 +103,30 @@ collapsed vs standard allele-frequency output agree on both mean (max |Δ| < 0.0
 and SD. Deleting the frequency MCMC + arrays is deferred to Phase 6 (below), once
 collapse is feature-complete and becomes the sole path.
 
-**Phase 6 — finalize.** Integrate the sex-biased model into the collapsed path
-(age-2 male-X source/native copy assignment + hemizygous male X already compose
-through `computeAddLogProb`; the sex/`gamma` Gibbs+MH blocks need re-enabling under
-`--collapse`); X/sex + missing-data integration checks (impute or omit missing
-copies from counts — decide and document); then remove the now-redundant frequency
-MCMC (`if(!NOALLELEMCMC)` block) and the `alleleFreqs`/`logAlleleFreqs`/
-`updateLogAlleleFreqs` machinery and flip `--collapse` to default. (The `z`-sweep is
-already thinned to every `noIndiv` iterations — Phase 4.)
+**Phase 6 — sex model + finalize.** *(Sex integration done.)* The sex-biased model
+now composes with `--collapse`: the count machinery was already sex-aware (age-2
+male-X source/native copy assignment via `migrantSex`, hemizygous male X = one
+copy), the `gamma` MH and `phi/rho` Gibbs blocks run unchanged, and the age-2
+male-X `sigma` Gibbs gained a collapsed branch (remove the X copy, form the
+log-odds from the count-based frequencies, resample, re-add — no `logAlleleFreqs`).
+The `sexBiasModel`-under-`--collapse` force-off is removed. *Gate (passed):* on a
+sex-biased set (2 pop, 300 indiv, 60 auto + 40 X, phiBreed 0.85) collapsed vs
+standard agree on `m`, `F`, `rho`, `phiMove`, `phiBreed`, `gamma`, and the
+Savage-Dickey BFs (all |z| < 0.25), collapsed recovers truth (score_recovery
+PASS), and runs ~4x faster (9 s vs 40 s).
+
+**Missing data:** *(decided — omit.)* The collapsed functions simply drop missing
+gene copies from the counts (a fully-missing locus is skipped; a partially-missing
+diploid locus contributes its one observed copy). BA3's imputation block
+(`if(!NOMISSINGDATA)`) stays gated off under `--collapse`.
+
+**Remaining (user decision).** Whether to (a) delete the now-redundant frequency
+MCMC (`if(!NOALLELEMCMC)` block) + `alleleFreqs`/`logAlleleFreqs`/
+`updateLogAlleleFreqs` and (b) flip `--collapse` to the default. Recommendation:
+**keep both paths** — the standard sampler is a valuable cross-check and fallback,
+and the collapse gates depend on running them side by side. Leave `--collapse`
+opt-in until it has more field mileage. (The `z`-sweep is already thinned to every
+`noIndiv` iterations — Phase 4.)
 
 ## Validation harness
 

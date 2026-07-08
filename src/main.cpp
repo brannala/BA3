@@ -1238,15 +1238,10 @@ common_processing:
 
 	// Sex-biased dispersal model setup. Active only when sex metadata was
 	// supplied (indivToSex non-empty). Requires complete sex information.
-	// The collapsed sampler (Phase 3) supports the base migration model only, so
-	// the sex-biased model is disabled under --collapse for now.
+	// The sex-biased model composes with the collapsed sampler (Phase 6): the
+	// count-table machinery is sex-aware (age-2 male-X source/native copy
+	// assignment via migrantSex), and the sigma Gibbs has a collapsed branch.
 	bool sexBiasModel = !indivToSex.empty();
-	if (gArgs.collapse && sexBiasModel)
-	{
-		std::cerr << "\nnote: --collapse currently supports the base migration model only;"
-		             " the sex-biased dispersal model is disabled for this run.\n";
-		sexBiasModel = false;
-	}
 	// Sex ratios (female fractions): movement dispersal (age-1 migrants), effective
 	// gene flow (age-2 migrant parents = migrants that also bred), and residents.
 	double phiMove = 0.5;             // female fraction of age-1 migrants (movement)
@@ -2159,17 +2154,59 @@ if (sexBiasModel)
 				// if the father (sigma = M). Gibbs from the posterior log-odds.
 				const unsigned int src = sampleIndiv[m].migrantPopln;
 				const unsigned int nat = sampleIndiv[m].samplePopln;
-				double logOdds = log(phiBreed) - log(1.0 - phiBreed);  // prior log-odds F:M
-				for (size_t xi = 0; xi < xLoci.size(); xi++)
+				if (gArgs.collapse)
 				{
-					unsigned int l = xLoci[xi];
-					if (sampleIndiv[m].genotype[l][1] != HEMIZYGOUS) continue;
-					int a0 = sampleIndiv[m].genotype[l][0];
-					if (a0 < 0) continue;
-					logOdds += logAlleleFreqs[src][l][a0] - logAlleleFreqs[nat][l][a0];
+					// Collapsed sigma Gibbs: the single X copy currently sits in src
+					// (sigma = F) or nat (sigma = M). Remove it, form the posterior
+					// log-odds from the count-based frequencies on the without-copy
+					// tables, resample, and re-add to the chosen population.
+					unsigned int oldPop = (sampleIndiv[m].migrantSex == SEX_FEMALE) ? src : nat;
+					for (size_t xi = 0; xi < xLoci.size(); xi++)
+					{
+						unsigned int l = xLoci[xi];
+						if (sampleIndiv[m].genotype[l][1] != HEMIZYGOUS) continue;
+						int a0 = sampleIndiv[m].genotype[l][0];
+						if (a0 < 0) continue;
+						removeCopy(gCount, gCountN, oldPop, l, a0);
+					}
+					double logOdds = log(phiBreed) - log(1.0 - phiBreed);  // prior log-odds F:M
+					for (size_t xi = 0; xi < xLoci.size(); xi++)
+					{
+						unsigned int l = xLoci[xi];
+						if (sampleIndiv[m].genotype[l][1] != HEMIZYGOUS) continue;
+						int a0 = sampleIndiv[m].genotype[l][0];
+						if (a0 < 0) continue;
+						logOdds += log(addRatio(gCount, gCountN, src, l, a0, noAlleles[l], ALLELE_PRIOR_ALPHA))
+						         - log(addRatio(gCount, gCountN, nat, l, a0, noAlleles[l], ALLELE_PRIOR_ALPHA));
+					}
+					double pF = 1.0 / (1.0 + exp(-logOdds));
+					newSigma = (gsl_rng_uniform(r) < pF) ? SEX_FEMALE : SEX_MALE;
+					unsigned int newPop = (newSigma == SEX_FEMALE) ? src : nat;
+					unsigned char code = (newSigma == SEX_FEMALE) ? 3 : 4;   // gAssign X-copy code
+					for (size_t xi = 0; xi < xLoci.size(); xi++)
+					{
+						unsigned int l = xLoci[xi];
+						if (sampleIndiv[m].genotype[l][1] != HEMIZYGOUS) continue;
+						int a0 = sampleIndiv[m].genotype[l][0];
+						if (a0 < 0) continue;
+						addCopy(gCount, gCountN, newPop, l, a0);
+						gAssign[m][l] = code;
+					}
 				}
-				double pF = 1.0 / (1.0 + exp(-logOdds));
-				newSigma = (gsl_rng_uniform(r) < pF) ? SEX_FEMALE : SEX_MALE;
+				else
+				{
+					double logOdds = log(phiBreed) - log(1.0 - phiBreed);  // prior log-odds F:M
+					for (size_t xi = 0; xi < xLoci.size(); xi++)
+					{
+						unsigned int l = xLoci[xi];
+						if (sampleIndiv[m].genotype[l][1] != HEMIZYGOUS) continue;
+						int a0 = sampleIndiv[m].genotype[l][0];
+						if (a0 < 0) continue;
+						logOdds += logAlleleFreqs[src][l][a0] - logAlleleFreqs[nat][l][a0];
+					}
+					double pF = 1.0 / (1.0 + exp(-logOdds));
+					newSigma = (gsl_rng_uniform(r) < pF) ? SEX_FEMALE : SEX_MALE;
+				}
 			}
 			else
 			{
@@ -2179,8 +2216,9 @@ if (sexBiasModel)
 			if (newSigma != sampleIndiv[m].migrantSex)
 			{
 				sampleIndiv[m].migrantSex = newSigma;
-				// Only a male's genotype likelihood depends on sigma.
-				if (sampleIndiv[m].sex == SEX_MALE && !NOLIKELIHOOD)
+				// Only a male's genotype likelihood depends on sigma. In collapse
+				// mode the count tables were already updated above (no cached logL).
+				if (sampleIndiv[m].sex == SEX_MALE && !NOLIKELIHOOD && !gArgs.collapse)
 					sampleIndiv[m].logL = logLik(sampleIndiv[m], alleleFreqs, logAlleleFreqs,
 					                             FStat, log1MinusFStat, noLoci);
 			}
