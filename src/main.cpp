@@ -2418,17 +2418,33 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 				sdPhiNSamples++;
 			}
 
+			double dirAlpha[MAXALLELE];
+			double dirDraw[MAXALLELE];
 			for (unsigned int l = 0; l < noPopln; l++)
 				for (unsigned int k = 0; k < noLoci; k++)
+				{
+					// In collapse mode the frequencies are integrated out, so alleleFreqs
+					// is never updated. For output, draw f from its exact Dirichlet
+					// full-conditional given the current count table (posterior parameters
+					// n[.]+alpha); the resulting mean/SD accumulators then carry the same
+					// meaning as the standard sampler's sampled-frequency output.
+					if(gArgs.collapse)
+					{
+						for(unsigned int m = 0; m < noAlleles[k]; m++)
+							dirAlpha[m] = (double)gCount[l][k][m] + ALLELE_PRIOR_ALPHA;
+						gsl_ran_dirichlet(r, noAlleles[k], dirAlpha, dirDraw);
+					}
 					for(unsigned int m = 0; m < noAlleles[k]; m++)
 					{
+						double freqVal = gArgs.collapse ? dirDraw[m] : alleleFreqs[l][k][m];
 						if(iter > 1)
 						{
-							sqrDiffMean=(alleleFreqs[l][k][m]-avgAlleleFreqs[l][k][m])*(alleleFreqs[l][k][m]-avgAlleleFreqs[l][k][m])/(iter+1.0);
+							sqrDiffMean=(freqVal-avgAlleleFreqs[l][k][m])*(freqVal-avgAlleleFreqs[l][k][m])/(iter+1.0);
 							varAlleleFreqs[l][k][m] = ((iter-1.0)/iter)*varAlleleFreqs[l][k][m]+sqrDiffMean;
 						}
-						avgAlleleFreqs[l][k][m] = avgAlleleFreqs[l][k][m]+(alleleFreqs[l][k][m]-avgAlleleFreqs[l][k][m])/(1.0+iter);
+						avgAlleleFreqs[l][k][m] = avgAlleleFreqs[l][k][m]+(freqVal-avgAlleleFreqs[l][k][m])/(1.0+iter);
 					}
+				}
 
 			for (unsigned int l=0; l < noPopln; l++)
 			{

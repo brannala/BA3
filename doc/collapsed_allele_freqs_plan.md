@@ -92,17 +92,25 @@ same-pop diploid homozygotes; replace the `FStat` MH block (`~1541`) with
 `F_p ~ Beta(a0 + sum z_p, b0 + #diploid_p - sum z_p)`. *Gate:* collapsed vs
 current on a simulated `F>0` set agree on `m` and `F` posteriors.
 
-**Phase 5 — remove the frequency MCMC + analytic output.** Delete the
-`if(!NOALLELEMCMC)` block (`~1440-1540`) and the `alleleFreqs`/`logAlleleFreqs`/
-`avgAlleleFreqs` arrays and `updateLogAlleleFreqs`. Replace frequency averaging/
-output with the analytic Dirichlet posterior mean `(n[p][l][a]+alpha)/(N[p][l]+A*alpha)`
-(and its SD), accumulated at sampling steps. *Gate:* `score_recovery.py` still
-passes on the `phi_move/phi_breed/gamma` simulations.
+**Phase 5 — analytic frequency output.** *(Done — split from the deletion.)* The
+standard sampler still carries the sex-biased model that the collapsed path lacks
+until Phase 6, so its frequency MCMC and `alleleFreqs`/`avgAlleleFreqs` arrays are
+**kept** for now. Instead, when `--collapse` is on, the sampling-step accumulator
+draws `f` from its exact Dirichlet full-conditional (posterior parameters
+`n[p][l][a]+alpha`) rather than reading the stale `alleleFreqs`; the reported
+mean/SD then match the standard sampler's sampled-frequency output. *Gate (passed):*
+collapsed vs standard allele-frequency output agree on both mean (max |Δ| < 0.01)
+and SD. Deleting the frequency MCMC + arrays is deferred to Phase 6 (below), once
+collapse is feature-complete and becomes the sole path.
 
-**Phase 6 — finalize.** X/sex + missing-data integration checks (impute or omit
-missing copies from counts — decide and document); optional `z`-sweep thinning if
-the O(noIndiv*noLoci) sweep dominates on large panels; flip `--collapse` to
-default (or keep both paths).
+**Phase 6 — finalize.** Integrate the sex-biased model into the collapsed path
+(age-2 male-X source/native copy assignment + hemizygous male X already compose
+through `computeAddLogProb`; the sex/`gamma` Gibbs+MH blocks need re-enabling under
+`--collapse`); X/sex + missing-data integration checks (impute or omit missing
+copies from counts — decide and document); then remove the now-redundant frequency
+MCMC (`if(!NOALLELEMCMC)` block) and the `alleleFreqs`/`logAlleleFreqs`/
+`updateLogAlleleFreqs` machinery and flip `--collapse` to default. (The `z`-sweep is
+already thinned to every `noIndiv` iterations — Phase 4.)
 
 ## Validation harness
 
