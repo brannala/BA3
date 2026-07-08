@@ -1218,8 +1218,16 @@ common_processing:
 		       
 		       noMissingGenotypes+=1;
 		       sampleIndiv[i].missingGenotypes.push_back(j);
-		       sampleIndiv[i].genotype[j][0] = gsl_rng_uniform_int(r, noAlleles[j]);
-		       sampleIndiv[i].genotype[j][1] = gsl_rng_uniform_int(r, noAlleles[j]);
+		       // The standard sampler imputes missing genotypes (data-augmentation
+		       // MH below). The collapsed sampler instead leaves them as -1 so the
+		       // count tables simply omit the missing gene copies -- the exact
+		       // Dirichlet-multinomial marginalization -- since its missing-data MH
+		       // is disabled and initCountsNative/computeAddLogProb skip a < 0.
+		       if (!gArgs.collapse)
+			 {
+			   sampleIndiv[i].genotype[j][0] = gsl_rng_uniform_int(r, noAlleles[j]);
+			   sampleIndiv[i].genotype[j][1] = gsl_rng_uniform_int(r, noAlleles[j]);
+			 }
 		       if (!hasMissing)
 			 {
 			   missingData.push_back(i);

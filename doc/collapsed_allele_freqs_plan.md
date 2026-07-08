@@ -115,10 +115,21 @@ standard agree on `m`, `F`, `rho`, `phiMove`, `phiBreed`, `gamma`, and the
 Savage-Dickey BFs (all |z| < 0.25), collapsed recovers truth (score_recovery
 PASS), and runs ~4x faster (9 s vs 40 s).
 
-**Missing data:** *(decided — omit.)* The collapsed functions simply drop missing
-gene copies from the counts (a fully-missing locus is skipped; a partially-missing
-diploid locus contributes its one observed copy). BA3's imputation block
-(`if(!NOMISSINGDATA)`) stays gated off under `--collapse`.
+**Missing data:** *(decided — marginalize by omission.)* Under `--collapse` the
+init-time random imputation of missing genotypes is skipped, so missing genotypes
+stay `-1` and the count tables drop those gene copies (a fully-missing locus is
+skipped; a partially-missing diploid contributes its one observed copy). This is
+the exact Dirichlet-multinomial marginalization. `initCountsNative`,
+`computeAddLogProb`, `addIndividual`, `removeIndividual`, `inbreedingUpdate`, and
+the collapsed `sigma` Gibbs all guard `allele < 0`, and BA3's missing-data MH
+(`if(!NOMISSINGDATA)`) stays gated off. The VCF reader marks a genotype missing
+(both alleles `-1`) whenever *either* allele is absent, so genotype-level "partial"
+missingness does not arise from VCF input. **Note:** the two paths therefore differ
+on missing data — the standard sampler imputes missing genotypes from the current
+(often native) population's frequencies, biasing migration downward, whereas
+collapse marginalizes and stays close to the full-data estimate. On a 15%-missing
+set: full-data m ~= 0.099 (both paths agree), standard-missing ~= 0.077 (biased
+down), collapse-missing ~= 0.088 (near-unbiased).
 
 **Remaining (user decision).** Whether to (a) delete the now-redundant frequency
 MCMC (`if(!NOALLELEMCMC)` block) + `alleleFreqs`/`logAlleleFreqs`/
