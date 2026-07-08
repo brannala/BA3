@@ -5,3 +5,5 @@
 # Downloaded empirical datasets (large; not versioned)
 doi_*dryad*.zip
 __pycache__/
+BHS_50K_SNPs.vcf.zip
+SNP_assay_targeted_loci.xlsx
