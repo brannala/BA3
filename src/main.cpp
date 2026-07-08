@@ -630,6 +630,46 @@ static double genoPred(long ***cnt, long **cntN, unsigned int p, unsigned int l,
 	return (1.0 - F) * (cnt[p][l][a0] + alpha) / N * (cnt[p][l][a1] + alpha) / Np1;
 }
 
+// Precomputed table of natural logs of small non-negative integers (gLogTab[k] =
+// log(k); gLogTab[0] unused). With the Dirichlet concentration fixed at
+// ALLELE_PRIOR_ALPHA = 1, every count ratio in the collapsed hot path is a ratio
+// of integers, so its log is a difference of table entries -- eliminating the bulk
+// of the libm log() calls that dominate the collapsed sampler's per-locus cost
+// (profiling: ~36% of samples). Sized to cover 2*noIndiv + maxAlleles + slack.
+static double *gLogTab = nullptr;
+static long gLogTabSize = 0;
+static void initLogTab(long maxArg)
+{
+	gLogTabSize = maxArg + 1;
+	gLogTab = new double[gLogTabSize];
+	gLogTab[0] = 0.0;   // never indexed (all arguments are >= 1)
+	for (long k = 1; k < gLogTabSize; k++) gLogTab[k] = log((double) k);
+}
+
+// log(addRatio) via the integer table (assumes alpha == 1): log((n+1)/(N+A)).
+static inline double logAddRatioT(long ***cnt, long **cntN, unsigned int p,
+                                  unsigned int l, int a, unsigned int A)
+{ return gLogTab[cnt[p][l][a] + 1] - gLogTab[cntN[p][l] + A]; }
+
+// log(genoPred) via the table (assumes alpha == 1). The heterozygote is fully
+// tabular; the homozygote keeps one real log for the IBD mixture F + (1-F)*r2,
+// which vanishes when F == 0 (then it too is tabular).
+static inline double logGenoPredT(long ***cnt, long **cntN, unsigned int p, unsigned int l,
+                                  int a0, int a1, unsigned int A, double F, double log1mF)
+{
+	long N = cntN[p][l];
+	if (a0 == a1)
+	{
+		double logr = gLogTab[cnt[p][l][a0] + 1] - gLogTab[N + A];
+		if (F == 0.0)
+			return logr + gLogTab[cnt[p][l][a0] + 2] - gLogTab[N + 1 + A];
+		double r2 = (double)(cnt[p][l][a0] + 2) / (double)(N + 1 + A);
+		return logr + log(F + (1.0 - F) * r2);
+	}
+	return log1mF + gLogTab[cnt[p][l][a0] + 1] - gLogTab[N + A]
+	              + gLogTab[cnt[p][l][a1] + 1] - gLogTab[N + 1 + A];
+}
+
 // Change in the collapsed log-marginal from ADDING individual i's gene copies
 // under its ancestry, given the current (without-i) counts. Read-only. Age 0/1
 // diploid genotypes marginalize the IBD indicator (genoPred, inbreeding F);
@@ -644,16 +684,17 @@ static double computeAddLogProb(long ***cnt, long **cntN, const indiv& ind,
 	{
 		unsigned int p = copyPop(ind);
 		double F = FStat[p];
+		double log1mF = (F > 0.0) ? log(1.0 - F) : 0.0;   // once per call (het factor)
 		for (unsigned int l = 0; l < noLoci; l++)
 		{
 			unsigned int A = noAlleles[l]; if (A == 0) continue;
 			int a0 = g[l][0], a1 = g[l][1];
 			if (a1 == HEMIZYGOUS || (a0 >= 0 && a1 < 0))       // hemizygous male X: single copy
 			{
-				if (a0 >= 0) dl += log(addRatio(cnt, cntN, p, l, a0, A, alpha));
+				if (a0 >= 0) dl += logAddRatioT(cnt, cntN, p, l, a0, A);
 			}
 			else if (a0 >= 0 && a1 >= 0)
-				dl += log(genoPred(cnt, cntN, p, l, a0, a1, A, alpha, F));
+				dl += logGenoPredT(cnt, cntN, p, l, a0, a1, A, F, log1mF);
 		}
 	}
 	else   // age 2: one copy from source (mig), one from native (nat); distinct cells
@@ -666,22 +707,25 @@ static double computeAddLogProb(long ***cnt, long **cntN, const indiv& ind,
 			if (a1 == HEMIZYGOUS)            // hemizygous male X: single copy
 			{
 				if (a0 < 0) continue;
-				double rm = addRatio(cnt, cntN, mig, l, a0, A, alpha);
-				double rn = addRatio(cnt, cntN, nat, l, a0, A, alpha);
-				if (ind.migrantSex == SEX_FEMALE)      dl += log(rm);
-				else if (ind.migrantSex == SEX_MALE)   dl += log(rn);
-				else                                    dl += log(0.5 * (rm + rn));
+				if (ind.migrantSex == SEX_FEMALE)      dl += logAddRatioT(cnt, cntN, mig, l, a0, A);
+				else if (ind.migrantSex == SEX_MALE)   dl += logAddRatioT(cnt, cntN, nat, l, a0, A);
+				else
+				{
+					double rm = addRatio(cnt, cntN, mig, l, a0, A, alpha);
+					double rn = addRatio(cnt, cntN, nat, l, a0, A, alpha);
+					dl += log(0.5 * (rm + rn));      // marginal over parent sex: log of a sum
+				}
 			}
 			else if (a0 >= 0 && a1 >= 0)
 			{
 				if (a0 == a1)
-					dl += log(addRatio(cnt, cntN, mig, l, a0, A, alpha))
-					    + log(addRatio(cnt, cntN, nat, l, a0, A, alpha));
+					dl += logAddRatioT(cnt, cntN, mig, l, a0, A)
+					    + logAddRatioT(cnt, cntN, nat, l, a0, A);
 				else
 				{
 					double w0 = addRatio(cnt, cntN, mig, l, a0, A, alpha) * addRatio(cnt, cntN, nat, l, a1, A, alpha);
 					double w1 = addRatio(cnt, cntN, mig, l, a1, A, alpha) * addRatio(cnt, cntN, nat, l, a0, A, alpha);
-					dl += log(0.5 * (w0 + w1));
+					dl += log(0.5 * (w0 + w1));       // phase marginal: log of a sum
 				}
 			}
 			else if (a0 >= 0)
@@ -701,7 +745,10 @@ static double addIndividual(long ***cnt, long **cntN, const indiv& ind, unsigned
                             double *FStat)
 {
 	const GenotypeType (*g)[2] = ind.genotype;
-	double dl = 0.0;
+	// Commit-only: this samples the latent per-locus codes and updates the counts;
+	// the add-log-prob is computed separately by computeAddLogProb, so no log() work
+	// is done here (the return value is unused at both call sites). Ratios are still
+	// formed where a sampling decision needs them.
 	if (ind.migrantAge != 2)
 	{
 		unsigned int p = copyPop(ind);
@@ -713,7 +760,7 @@ static double addIndividual(long ***cnt, long **cntN, const indiv& ind, unsigned
 			int a0 = g[l][0], a1 = g[l][1];
 			if (a1 == HEMIZYGOUS || (a0 >= 0 && a1 < 0))       // hemizygous male X: single copy
 			{
-				if (a0 >= 0) { dl += log(addRatio(cnt, cntN, p, l, a0, A, alpha)); addCopy(cnt, cntN, p, l, a0); }
+				if (a0 >= 0) addCopy(cnt, cntN, p, l, a0);
 			}
 			else if (a0 >= 0 && a1 >= 0)
 			{
@@ -722,7 +769,6 @@ static double addIndividual(long ***cnt, long **cntN, const indiv& ind, unsigned
 					double rr  = addRatio(cnt, cntN, p, l, a0, A, alpha);
 					double rr2 = (cnt[p][l][a0] + 1 + alpha) / (cntN[p][l] + 1 + A * alpha);
 					double pz1 = F * rr, pz0 = (1.0 - F) * rr * rr2;
-					dl += log(pz1 + pz0);
 					if (gsl_rng_uniform(r) < pz1 / (pz1 + pz0))
 					{ addCopy(cnt, cntN, p, l, a0); assign[l] = 1; }          // IBD: one copy
 					else
@@ -730,8 +776,8 @@ static double addIndividual(long ***cnt, long **cntN, const indiv& ind, unsigned
 				}
 				else            // het: always outbred, two copies
 				{
-					dl += log(addRatio(cnt, cntN, p, l, a0, A, alpha)); addCopy(cnt, cntN, p, l, a0);
-					dl += log(addRatio(cnt, cntN, p, l, a1, A, alpha)); addCopy(cnt, cntN, p, l, a1);
+					addCopy(cnt, cntN, p, l, a0);
+					addCopy(cnt, cntN, p, l, a1);
 				}
 			}
 		}
@@ -747,12 +793,15 @@ static double addIndividual(long ***cnt, long **cntN, const indiv& ind, unsigned
 			if (a1 == HEMIZYGOUS || (a0 >= 0 && a1 < 0))     // single copy (hemizygous male X)
 			{
 				if (a0 < 0) continue;
-				double rm = addRatio(cnt, cntN, mig, l, a0, A, alpha);
-				double rn = addRatio(cnt, cntN, nat, l, a0, A, alpha);
 				bool toSrc;
-				if (ind.migrantSex == SEX_FEMALE)      { toSrc = true;  dl += log(rm); }
-				else if (ind.migrantSex == SEX_MALE)   { toSrc = false; dl += log(rn); }
-				else { toSrc = (gsl_rng_uniform(r) < rm / (rm + rn)); dl += log(0.5 * (rm + rn)); }
+				if (ind.migrantSex == SEX_FEMALE)      toSrc = true;
+				else if (ind.migrantSex == SEX_MALE)   toSrc = false;
+				else
+				{
+					double rm = addRatio(cnt, cntN, mig, l, a0, A, alpha);
+					double rn = addRatio(cnt, cntN, nat, l, a0, A, alpha);
+					toSrc = (gsl_rng_uniform(r) < rm / (rm + rn));
+				}
 				if (toSrc) { addCopy(cnt, cntN, mig, l, a0); assign[l] = 3; }
 				else       { addCopy(cnt, cntN, nat, l, a0); assign[l] = 4; }
 			}
@@ -760,8 +809,8 @@ static double addIndividual(long ***cnt, long **cntN, const indiv& ind, unsigned
 			{
 				if (a0 == a1)
 				{
-					dl += log(addRatio(cnt, cntN, mig, l, a0, A, alpha)); addCopy(cnt, cntN, mig, l, a0);
-					dl += log(addRatio(cnt, cntN, nat, l, a0, A, alpha)); addCopy(cnt, cntN, nat, l, a0);
+					addCopy(cnt, cntN, mig, l, a0);
+					addCopy(cnt, cntN, nat, l, a0);
 				}
 				else
 				{
@@ -771,12 +820,11 @@ static double addIndividual(long ***cnt, long **cntN, const indiv& ind, unsigned
 					{ addCopy(cnt, cntN, mig, l, a0); addCopy(cnt, cntN, nat, l, a1); assign[l] = 1; }
 					else
 					{ addCopy(cnt, cntN, mig, l, a1); addCopy(cnt, cntN, nat, l, a0); assign[l] = 2; }
-					dl += log(0.5 * (w0 + w1));
 				}
 			}
 		}
 	}
-	return dl;
+	return 0.0;
 }
 
 // Permanently REMOVE individual i's gene copies, undoing exactly what
@@ -1523,6 +1571,9 @@ common_processing:
 			gAssign[i] = new unsigned char[noLoci];
 			for(unsigned int l = 0; l < noLoci; l++) gAssign[i][l] = 0;
 		}
+		// log table for the collapsed hot path: max index is cntN(<=2*noIndiv) + A
+		// + 1, plus a homozygote's cnt+2; +8 slack covers all count-ratio arguments.
+		initLogTab(2L * (long)noIndiv + (long)maxAlleles + 8);
 		initCountsNative(gCount, gCountN, sampleIndiv, noIndiv, noLoci, noAlleles, noPopln);
 		double cll = collapsedLogLik(gCount, gCountN, noPopln, noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
 		std::cout << "collapsed init logL (Dirichlet-multinomial, alpha="
@@ -2905,6 +2956,7 @@ mcmcout << "\n Population Labels:\n";
 		delete[] gCount; delete[] gCountN;
 		for(unsigned int i = 0; i < noIndiv; i++) delete[] gAssign[i];
 		delete[] gAssign;
+		delete[] gLogTab; gLogTab = nullptr;
 	}
 
 	// Free migrationRates, avgMigrationRates, varMigrationRates (2D arrays: noPopln x noPopln+1)
