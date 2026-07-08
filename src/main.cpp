@@ -2214,11 +2214,15 @@ if(!NOMISSINGDATA && !gArgs.collapse)
 // Metropolis-Hastings update of the migrant breeding-success multiplier gamma
 // (tau = 2*gamma = age-2:age-1 rate ratio). Random walk on log(gamma); the age
 // counts inform it. Requires (1+tau)*sum_m < 1 in every population.
-// With --fixgamma, gamma stays at its initial 1.0 (original BayesAss: tau=2,
-// migration cap 1/3), so the update is skipped.
+// gamma is bounded to (0, 1]: gamma=1 is migrants breeding as well as residents
+// (the neutral/stationary maximum), gamma<1 is reduced migrant breeding success;
+// gamma>1 would mean migrants out-breed residents, impossible under a stationary
+// neutral model. The proposal is reflected at log(gamma)=0 (symmetric, so no
+// Hastings term). With --fixgamma, gamma stays fixed at 1 and this is skipped.
 if (!NOMIGRATEMCMC && !gArgs.fixGamma)
 {
 	double propLogGamma = log(gamma) + gsl_ran_gaussian(r, GAMMA_PROP_SD);
+	if (propLogGamma > 0.0) propLogGamma = -propLogGamma;   // reflect at gamma=1: bound to (0,1]
 	double propGamma = exp(propLogGamma);
 	double tProp = 2.0 * propGamma, tCur = 2.0 * gamma;
 	bool feasible = true;
