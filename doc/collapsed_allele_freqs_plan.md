@@ -180,12 +180,12 @@ opt-in until it has more field mileage. (The `z`-sweep is already thinned to eve
 ## Measured performance
 
 Wall-clock, standard vs `--collapse`, matched seed and iteration count (after the
-two optimizations below):
+optimizations below):
 
 | Dataset | Indiv | Loci (X) | Iters | Standard | Collapse | Speedup |
 |---|---|---|---|---|---|---|
 | Simulated sex-biased | 300 | 100 (40) | 400k | 39 s | 8 s | ~4.9x |
-| Brown bear (de Jong 2023) | 36 | 5102 (2582) | 200k | 49 s | 30 s | ~1.6x |
+| Brown bear (de Jong 2023) | 36 | 5102 (2582) | 200k | 49 s | 27 s | ~1.8x |
 
 **The speedup scales with the individuals-to-loci ratio, not with size.** The
 collapsed sampler's win comes from removing the allele-frequency parameters (and
@@ -207,8 +207,8 @@ term drops out and the advantage reverts toward the pure-N frequency term.
 
 ### Profiling and optimizations
 
-`sample`-based profiling of the collapsed sampler found two hotspots, in two
-different dataset regimes, both since optimized:
+`sample`-based profiling of the collapsed sampler found hotspots in two different
+dataset regimes (loci-bound and indiv-bound), all since optimized:
 
 1. **`log()` in the ancestry-move predictive (~36%, loci-bound / bear regime).**
    With the Dirichlet concentration fixed at `ALLELE_PRIOR_ALPHA = 1`, every count
@@ -224,6 +224,23 @@ different dataset regimes, both since optimized:
    by per-category index lists (O(1) uniform selection) and incremental count
    updates. This is *shared* with the standard sampler. It flattened the collapsed
    run time in N (see below).
+3. **Homozygote IBD-mixture `log` memo (the remaining ~12%, loci-bound).** After
+   (1), the one real hot-path `log` is `log(F + (1-F)*(n+2)/D)` (D = N+1+A) per
+   homozygous locus. It depends only on `(population, n, D)` within an inbreeding
+   epoch (F constant), so it is pooled across all loci sharing a homozygous count
+   state: a per-population memo keyed by `(n, D)`, filled lazily, invalidated by an
+   O(1) epoch bump when `inbreedingUpdate` changes F. `log()` self-time fell
+   1721 -> 77 samples (22x); bear 30.4 s -> 27.5 s. Values are identical, so this
+   is pure speed. (F=0 runs use the pure-table homozygote path and never touch it.)
+
+**A layout change was measured and rejected.** Flattening the `long***` count
+tables to contiguous per-population arrays looked promising, but measuring the
+per-locus cost across L at fixed N (M1 Pro) showed it flat -- 31.9 ns at L=1000
+(count table in L1) vs 33.1 ns at L=32000 (1 MB, in the 12 MB L2) -- so the sweeps
+are compute-bound, not cache-bound, and the pointer-chase is hidden by the large
+L2 and out-of-order execution. Flattening would buy only the ~5% L1->L2 delta (and
+only matter if the tables spilled to DRAM, i.e. L >~ 375k loci), not worth the
+churn.
 
 ### Scaling in N at fixed L
 
