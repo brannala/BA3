@@ -45,6 +45,7 @@ struct globalArgs {
 	int nolikelihood;
 	int autotune;
 	int collapse;            // integrate out allele frequencies (collapsed sampler); default off
+	int fixGamma;            // fix gamma = 1 (original BayesAss: tau=2, migration cap 1/3); default off
 	int useVCF;              // Use VCF input format
 	char vcfFileName[256];   // VCF file path
 	char metaFileName[256];  // Metadata file path (INDIV POPLN)
@@ -52,7 +53,7 @@ struct globalArgs {
 	char freqFileName[256];  // Allele frequencies file path
 } gArgs;
 
-static const char *optString = "s:i:n:b:o:m:a:f:V:M:F:cvugtdphTN?";
+static const char *optString = "s:i:n:b:o:m:a:f:V:M:F:cGvugtdphTN?";
 
 static const struct option longOpts[] = {
 	{ "seed", required_argument, NULL, 's' },
@@ -76,6 +77,7 @@ static const struct option longOpts[] = {
 	{ "autotune", no_argument, NULL, 'T'},
 	{ "noautotune", no_argument, NULL, 'N'},
 	{ "collapse", no_argument, NULL, 'c'},
+	{ "fixgamma", no_argument, NULL, 'G'},
 	{ NULL, no_argument, NULL, 0 }
 };
 
@@ -977,6 +979,7 @@ int main( int argc, char *argv[] )
 	gArgs.nolikelihood=0;
 	gArgs.autotune = 1;  // autotune enabled by default
 	gArgs.collapse = 0;  // collapsed (integrated-frequency) sampler off by default
+	gArgs.fixGamma = 0;  // estimate gamma by default; --fixgamma pins gamma=1
 	gArgs.usingOutfile = 1;
 	gArgs.useVCF = 0;
 	gArgs.vcfFileName[0] = '\0';
@@ -1058,6 +1061,10 @@ int main( int argc, char *argv[] )
 				gArgs.collapse = 1;
 				break;
 
+			case 'G':
+				gArgs.fixGamma = 1;
+				break;
+
 			case 'V':
 				strncpy(gArgs.vcfFileName, optarg, sizeof(gArgs.vcfFileName) - 1);
 				gArgs.vcfFileName[sizeof(gArgs.vcfFileName) - 1] = '\0';
@@ -1091,6 +1098,7 @@ int main( int argc, char *argv[] )
 				std::cout << "    -T, --autotune    auto-tune mixing parameters during burn-in (default)\n";
 				std::cout << "    -N, --noautotune  disable auto-tuning of mixing parameters\n";
 				std::cout << "    -c, --collapse    integrate out allele frequencies (collapsed sampler; faster)\n";
+				std::cout << "    -G, --fixgamma    fix gamma=1 (original BayesAss: tau=2, migration cap 1/3)\n";
 				exit(0);
 
 			case '?':
@@ -2206,7 +2214,9 @@ if(!NOMISSINGDATA && !gArgs.collapse)
 // Metropolis-Hastings update of the migrant breeding-success multiplier gamma
 // (tau = 2*gamma = age-2:age-1 rate ratio). Random walk on log(gamma); the age
 // counts inform it. Requires (1+tau)*sum_m < 1 in every population.
-if (!NOMIGRATEMCMC)
+// With --fixgamma, gamma stays at its initial 1.0 (original BayesAss: tau=2,
+// migration cap 1/3), so the update is skipped.
+if (!NOMIGRATEMCMC && !gArgs.fixGamma)
 {
 	double propLogGamma = log(gamma) + gsl_ran_gaussian(r, GAMMA_PROP_SD);
 	double propGamma = exp(propLogGamma);
