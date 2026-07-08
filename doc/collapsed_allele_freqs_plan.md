@@ -199,6 +199,45 @@ frequency MCMC it eliminates is already cheap here (one locus per iteration, at
 O(indiv) cost). So collapse still wins, but only modestly (~1.3x) in the
 loci >> indiv regime, versus ~4-6x when indiv >= loci.
 
+More precisely, the per-iteration advantage is a sum of terms, not purely O(indiv):
+the removed frequency MCMC saves O(N), the removed `F`-statistic MCMC saves
+O((N/P)*L) (it re-evaluates the chosen population's individuals across all loci),
+and the collapsed ancestry move adds a ~3*O(L) penalty (extra loci-passes). Net
+`~ a*N + b*(N/P)*L - c*L`: it grows with N and, via the F-stat term, with L as long
+as N/P exceeds the ancestry penalty (~4). With `-u` (no inbreeding) the O((N/P)*L)
+term drops out and the advantage reverts toward the pure-N frequency term.
+
+## Mixing (effective sample size)
+
+Wall-clock speed is only half the story: the collapsed chain also *mixes* better,
+because integrating out the allele frequencies removes the ancestry/migration <->
+frequency coupling (a Rao-Blackwell / marginalization effect). Measured by the
+integrated autocorrelation time (IAT) and effective sample size (ESS) of the
+migration-rate trace columns (`sim/ess.py`, Geyer initial-positive-sequence
+estimator; every-iteration trace, 80-100k post-burn-in samples, matched seed):
+
+| Dataset | Standard median ESS/iter | Collapse median ESS/iter | Worst-column ESS (std -> col) |
+|---|---|---|---|
+| Simulated (300 indiv, 100 loci) | 0.0063 (IAT 167) | 0.0122 (IAT 82) | 398 -> 971 |
+| Brown bear (36 indiv, 5102 loci) | 0.0043 (IAT 231) | 0.0067 (IAT 150) | **6 -> 184** |
+
+Collapse mixes ~1.5-2x better per iteration in the median on both dataset shapes,
+and the collapsed IATs are near-uniform across migration rates (e.g. 82.0-82.4 on
+the simulated set) where the standard IATs vary (132-201). The sharpest effect is
+on the *worst* coordinate: on the bear set the standard chain had a migration rate
+that was essentially frozen (ESS 6 in 100k samples -- a small rate locked to
+poorly-mixing frequencies), which collapse unsticks to ESS 184.
+
+**Effective samples per second** = (ESS/iter) * (iters/sec) combines both factors
+multiplicatively: ~1.9x mixing * ~4-6x speed ~= 8-11x on the simulated set, and
+~1.5x mixing * ~1.3x speed ~= 2x on the bear set. So even in the loci >> indiv
+regime where the raw speedup is modest, the mixing gain roughly doubles the real
+efficiency, and the unstuck worst-parameter means far fewer iterations are needed
+for a reliable estimate of every rate.
+
+Reproduce: run each sampler with `-t -n 1` (dense trace), rename `BA3trace.txt`,
+then `python sim/ess.py <label> <trace> <burnin>`.
+
 ## Open decisions to confirm before coding
 
 1. `alpha` value (default 1.0 uniform; or a smaller symmetric value).
