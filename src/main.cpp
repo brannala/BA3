@@ -646,6 +646,28 @@ static void initLogTab(long maxArg)
 	for (long k = 1; k < gLogTabSize; k++) gLogTab[k] = log((double) k);
 }
 
+// Memoized homozygote IBD-mixture log, log(F + (1-F)*(n+2)/D), keyed by
+// (population, homozygous count n, denominator D = N+1+A). This is the one real
+// log() left in the collapsed hot path (F > 0); F is constant between inbreeding
+// updates, so the value depends only on (n, D) within an epoch and is shared by
+// every locus whose homozygous count state matches -- pooling the log across loci.
+// Filled lazily; an O(1) epoch bump invalidates the whole table when any F changes.
+static double **gHomLog = nullptr;
+static long   **gHomEpoch = nullptr;
+static long gHomDDim = 0, gHomEpochCur = 1;
+static void initHomLog(unsigned int noPopln, long nDim, long dDim)
+{
+	gHomDDim = dDim;
+	gHomLog   = new double*[noPopln];
+	gHomEpoch = new long*[noPopln];
+	for (unsigned int p = 0; p < noPopln; p++)
+	{
+		gHomLog[p]   = new double[nDim * dDim];
+		gHomEpoch[p] = new long[nDim * dDim];
+		for (long i = 0; i < nDim * dDim; i++) gHomEpoch[p][i] = 0;   // != gHomEpochCur
+	}
+}
+
 // log(addRatio) via the integer table (assumes alpha == 1): log((n+1)/(N+A)).
 static inline double logAddRatioT(long ***cnt, long **cntN, unsigned int p,
                                   unsigned int l, int a, unsigned int A)
@@ -660,11 +682,20 @@ static inline double logGenoPredT(long ***cnt, long **cntN, unsigned int p, unsi
 	long N = cntN[p][l];
 	if (a0 == a1)
 	{
-		double logr = gLogTab[cnt[p][l][a0] + 1] - gLogTab[N + A];
+		long n = cnt[p][l][a0];
+		double logr = gLogTab[n + 1] - gLogTab[N + A];
 		if (F == 0.0)
-			return logr + gLogTab[cnt[p][l][a0] + 2] - gLogTab[N + 1 + A];
-		double r2 = (double)(cnt[p][l][a0] + 2) / (double)(N + 1 + A);
-		return logr + log(F + (1.0 - F) * r2);
+			return logr + gLogTab[n + 2] - gLogTab[N + 1 + A];
+		// IBD-mixture log, memoized by (n, D): shared across loci with the same
+		// homozygous count state; recomputed only when the epoch (F) changed.
+		long D = N + 1 + (long) A;
+		long idx = n * gHomDDim + D;
+		if (gHomEpoch[p][idx] != gHomEpochCur)
+		{
+			gHomLog[p][idx] = log(F + (1.0 - F) * (double)(n + 2) / (double) D);
+			gHomEpoch[p][idx] = gHomEpochCur;
+		}
+		return logr + gHomLog[p][idx];
 	}
 	return log1mF + gLogTab[cnt[p][l][a0] + 1] - gLogTab[N + A]
 	              + gLogTab[cnt[p][l][a1] + 1] - gLogTab[N + 1 + A];
@@ -1594,6 +1625,9 @@ common_processing:
 		// log table for the collapsed hot path: max index is cntN(<=2*noIndiv) + A
 		// + 1, plus a homozygote's cnt+2; +8 slack covers all count-ratio arguments.
 		initLogTab(2L * (long)noIndiv + (long)maxAlleles + 8);
+		// homozygote IBD-mixture memo: n in [0, 2*noIndiv], D = N+1+A in
+		// [0, 2*noIndiv + maxAlleles + 1]; +3 slack on each dimension.
+		initHomLog(noPopln, 2L * (long)noIndiv + 3, 2L * (long)noIndiv + (long)maxAlleles + 3);
 		initCountsNative(gCount, gCountN, sampleIndiv, noIndiv, noLoci, noAlleles, noPopln);
 		double cll = collapsedLogLik(gCount, gCountN, noPopln, noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
 		std::cout << "collapsed init logL (Dirichlet-multinomial, alpha="
@@ -2123,8 +2157,11 @@ if(!NOFSTATMCMC && !gArgs.collapse)
 // their IBD indicators resampled by addIndividual in the meantime.
 if(gArgs.collapse && !NOLIKELIHOOD && !NOFSTATMCMC
    && (i % (noIndiv > 1 ? noIndiv : 1) == 0))
+{
 	inbreedingUpdate(gCount, gCountN, sampleIndiv, gAssign, noIndiv, noLoci,
 	                 noAlleles, noPopln, ALLELE_PRIOR_ALPHA, FStat);
+	gHomEpochCur++;   // F changed: invalidate the homozygote-mixture memo (O(1))
+}
 
 if(!NOMISSINGDATA && !gArgs.collapse)
 {
@@ -2979,6 +3016,9 @@ mcmcout << "\n Population Labels:\n";
 		for(unsigned int i = 0; i < noIndiv; i++) delete[] gAssign[i];
 		delete[] gAssign;
 		delete[] gLogTab; gLogTab = nullptr;
+		for(unsigned int p = 0; p < noPopln; p++) { delete[] gHomLog[p]; delete[] gHomEpoch[p]; }
+		delete[] gHomLog;   gHomLog = nullptr;
+		delete[] gHomEpoch; gHomEpoch = nullptr;
 	}
 
 	// Free migrationRates, avgMigrationRates, varMigrationRates (2D arrays: noPopln x noPopln+1)
