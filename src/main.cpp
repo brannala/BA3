@@ -600,63 +600,178 @@ static inline void removeCopy(long ***cnt, long **cntN, unsigned int p, unsigned
 { cnt[p][l][a]--; cntN[p][l]--; }
 
 // Population an individual's gene copies are drawn from for age 0 (native) and
-// age 1 (migrant). Age 2 (one copy from each population, with a latent phase) is
-// handled in Phase 3.
+// age 1 (migrant); both copies come from this one population.
 static inline unsigned int copyPop(const indiv& ind)
 { return (ind.migrantAge == 1) ? ind.migrantPopln : ind.samplePopln; }
 
+// Per-locus phase/assignment codes stored for age-2 individuals so a later
+// remove can undo exactly what an add committed:
+//   0 = none (age 0/1, or age-2 homozygote: deterministic)
+//   1 = age-2 het, a0 -> source (migrantPopln), a1 -> native (samplePopln)
+//   2 = age-2 het, a1 -> source,                a0 -> native
+//   3 = age-2 hemizygous male X, single copy -> source
+//   4 = age-2 hemizygous male X, single copy -> native
+
 // Change in the collapsed log-marginal from ADDING individual i's gene copies
-// under its current ancestry, given the current (without-i) counts. Copies to
-// the same cell are added sequentially (so the ratio sees the incremented
-// count); the counts are mutated then restored, so this is read-only.
+// under its ancestry, given the current (without-i) counts. Read-only. Age-2
+// marginalizes the latent phase (a priori 1/2 each). For age 0/1, copies to the
+// same cell are sequenced (mutate-then-restore) so the ratio sees the increment.
 static double computeAddLogProb(long ***cnt, long **cntN, const indiv& ind,
                                 unsigned int noLoci, unsigned int *noAlleles, double alpha)
 {
-	unsigned int p = copyPop(ind);
 	const GenotypeType (*g)[2] = ind.genotype;
 	double dl = 0.0;
-	for (unsigned int l = 0; l < noLoci; l++)
+	if (ind.migrantAge != 2)
 	{
-		unsigned int A = noAlleles[l]; if (A == 0) continue;
-		int a0 = g[l][0], a1 = g[l][1];
-		if (a0 >= 0) { dl += log(addRatio(cnt, cntN, p, l, a0, A, alpha)); addCopy(cnt, cntN, p, l, a0); }
-		if (a1 >= 0) { dl += log(addRatio(cnt, cntN, p, l, a1, A, alpha)); addCopy(cnt, cntN, p, l, a1); }
+		unsigned int p = copyPop(ind);
+		for (unsigned int l = 0; l < noLoci; l++)
+		{
+			unsigned int A = noAlleles[l]; if (A == 0) continue;
+			int a0 = g[l][0], a1 = g[l][1];
+			if (a0 >= 0) { dl += log(addRatio(cnt, cntN, p, l, a0, A, alpha)); addCopy(cnt, cntN, p, l, a0); }
+			if (a1 >= 0) { dl += log(addRatio(cnt, cntN, p, l, a1, A, alpha)); addCopy(cnt, cntN, p, l, a1); }
+		}
+		for (unsigned int l = 0; l < noLoci; l++)   // restore
+		{
+			int a0 = g[l][0], a1 = g[l][1];
+			if (a1 >= 0) removeCopy(cnt, cntN, p, l, a1);
+			if (a0 >= 0) removeCopy(cnt, cntN, p, l, a0);
+		}
 	}
-	for (unsigned int l = 0; l < noLoci; l++)   // restore
+	else   // age 2: one copy from source (mig), one from native (nat); distinct cells
 	{
-		int a0 = g[l][0], a1 = g[l][1];
-		if (a1 >= 0) removeCopy(cnt, cntN, p, l, a1);
-		if (a0 >= 0) removeCopy(cnt, cntN, p, l, a0);
+		unsigned int mig = ind.migrantPopln, nat = ind.samplePopln;
+		for (unsigned int l = 0; l < noLoci; l++)
+		{
+			unsigned int A = noAlleles[l]; if (A == 0) continue;
+			int a0 = g[l][0], a1 = g[l][1];
+			if (a1 == HEMIZYGOUS)            // hemizygous male X: single copy
+			{
+				if (a0 < 0) continue;
+				double rm = addRatio(cnt, cntN, mig, l, a0, A, alpha);
+				double rn = addRatio(cnt, cntN, nat, l, a0, A, alpha);
+				if (ind.migrantSex == SEX_FEMALE)      dl += log(rm);
+				else if (ind.migrantSex == SEX_MALE)   dl += log(rn);
+				else                                    dl += log(0.5 * (rm + rn));
+			}
+			else if (a0 >= 0 && a1 >= 0)
+			{
+				if (a0 == a1)
+					dl += log(addRatio(cnt, cntN, mig, l, a0, A, alpha))
+					    + log(addRatio(cnt, cntN, nat, l, a0, A, alpha));
+				else
+				{
+					double w0 = addRatio(cnt, cntN, mig, l, a0, A, alpha) * addRatio(cnt, cntN, nat, l, a1, A, alpha);
+					double w1 = addRatio(cnt, cntN, mig, l, a1, A, alpha) * addRatio(cnt, cntN, nat, l, a0, A, alpha);
+					dl += log(0.5 * (w0 + w1));
+				}
+			}
+			else if (a0 >= 0)
+				dl += log(0.5 * (addRatio(cnt, cntN, mig, l, a0, A, alpha)
+				               + addRatio(cnt, cntN, nat, l, a0, A, alpha)));
+		}
 	}
 	return dl;
 }
 
-// Permanently remove / add individual i's gene copies (age 0/1).
-static void removeIndividual(long ***cnt, long **cntN, const indiv& ind, unsigned int noLoci)
-{
-	unsigned int p = copyPop(ind);
-	const GenotypeType (*g)[2] = ind.genotype;
-	for (unsigned int l = 0; l < noLoci; l++)
-	{
-		int a0 = g[l][0], a1 = g[l][1];
-		if (a0 >= 0) removeCopy(cnt, cntN, p, l, a0);
-		if (a1 >= 0) removeCopy(cnt, cntN, p, l, a1);
-	}
-}
-static double addIndividual(long ***cnt, long **cntN, const indiv& ind,
+// Permanently ADD individual i's gene copies, sampling the age-2 latent phase
+// per locus (stored in assign[]) so removeIndividual can undo it. Returns the
+// same (phase-marginalized) log-prob as computeAddLogProb.
+static double addIndividual(long ***cnt, long **cntN, const indiv& ind, unsigned char *assign,
                             unsigned int noLoci, unsigned int *noAlleles, double alpha)
 {
-	unsigned int p = copyPop(ind);
 	const GenotypeType (*g)[2] = ind.genotype;
 	double dl = 0.0;
-	for (unsigned int l = 0; l < noLoci; l++)
+	if (ind.migrantAge != 2)
 	{
-		unsigned int A = noAlleles[l]; if (A == 0) continue;
-		int a0 = g[l][0], a1 = g[l][1];
-		if (a0 >= 0) { dl += log(addRatio(cnt, cntN, p, l, a0, A, alpha)); addCopy(cnt, cntN, p, l, a0); }
-		if (a1 >= 0) { dl += log(addRatio(cnt, cntN, p, l, a1, A, alpha)); addCopy(cnt, cntN, p, l, a1); }
+		unsigned int p = copyPop(ind);
+		for (unsigned int l = 0; l < noLoci; l++)
+		{
+			unsigned int A = noAlleles[l]; if (A == 0) { assign[l] = 0; continue; }
+			int a0 = g[l][0], a1 = g[l][1];
+			if (a0 >= 0) { dl += log(addRatio(cnt, cntN, p, l, a0, A, alpha)); addCopy(cnt, cntN, p, l, a0); }
+			if (a1 >= 0) { dl += log(addRatio(cnt, cntN, p, l, a1, A, alpha)); addCopy(cnt, cntN, p, l, a1); }
+			assign[l] = 0;
+		}
+	}
+	else
+	{
+		unsigned int mig = ind.migrantPopln, nat = ind.samplePopln;
+		for (unsigned int l = 0; l < noLoci; l++)
+		{
+			assign[l] = 0;
+			unsigned int A = noAlleles[l]; if (A == 0) continue;
+			int a0 = g[l][0], a1 = g[l][1];
+			if (a1 == HEMIZYGOUS || (a0 >= 0 && a1 < 0))     // single copy (hemizygous male X)
+			{
+				if (a0 < 0) continue;
+				double rm = addRatio(cnt, cntN, mig, l, a0, A, alpha);
+				double rn = addRatio(cnt, cntN, nat, l, a0, A, alpha);
+				bool toSrc;
+				if (ind.migrantSex == SEX_FEMALE)      { toSrc = true;  dl += log(rm); }
+				else if (ind.migrantSex == SEX_MALE)   { toSrc = false; dl += log(rn); }
+				else { toSrc = (gsl_rng_uniform(r) < rm / (rm + rn)); dl += log(0.5 * (rm + rn)); }
+				if (toSrc) { addCopy(cnt, cntN, mig, l, a0); assign[l] = 3; }
+				else       { addCopy(cnt, cntN, nat, l, a0); assign[l] = 4; }
+			}
+			else if (a0 >= 0 && a1 >= 0)
+			{
+				if (a0 == a1)
+				{
+					dl += log(addRatio(cnt, cntN, mig, l, a0, A, alpha)); addCopy(cnt, cntN, mig, l, a0);
+					dl += log(addRatio(cnt, cntN, nat, l, a0, A, alpha)); addCopy(cnt, cntN, nat, l, a0);
+				}
+				else
+				{
+					double w0 = addRatio(cnt, cntN, mig, l, a0, A, alpha) * addRatio(cnt, cntN, nat, l, a1, A, alpha);
+					double w1 = addRatio(cnt, cntN, mig, l, a1, A, alpha) * addRatio(cnt, cntN, nat, l, a0, A, alpha);
+					if (gsl_rng_uniform(r) < w0 / (w0 + w1))
+					{ addCopy(cnt, cntN, mig, l, a0); addCopy(cnt, cntN, nat, l, a1); assign[l] = 1; }
+					else
+					{ addCopy(cnt, cntN, mig, l, a1); addCopy(cnt, cntN, nat, l, a0); assign[l] = 2; }
+					dl += log(0.5 * (w0 + w1));
+				}
+			}
+		}
 	}
 	return dl;
+}
+
+// Permanently REMOVE individual i's gene copies, undoing exactly what
+// addIndividual committed (using the stored age-2 phase codes).
+static void removeIndividual(long ***cnt, long **cntN, const indiv& ind,
+                             unsigned char *assign, unsigned int noLoci)
+{
+	const GenotypeType (*g)[2] = ind.genotype;
+	if (ind.migrantAge != 2)
+	{
+		unsigned int p = copyPop(ind);
+		for (unsigned int l = 0; l < noLoci; l++)
+		{
+			int a0 = g[l][0], a1 = g[l][1];
+			if (a0 >= 0) removeCopy(cnt, cntN, p, l, a0);
+			if (a1 >= 0) removeCopy(cnt, cntN, p, l, a1);
+		}
+	}
+	else
+	{
+		unsigned int mig = ind.migrantPopln, nat = ind.samplePopln;
+		for (unsigned int l = 0; l < noLoci; l++)
+		{
+			int a0 = g[l][0], a1 = g[l][1];
+			switch (assign[l])
+			{
+				case 1: removeCopy(cnt, cntN, mig, l, a0); removeCopy(cnt, cntN, nat, l, a1); break;
+				case 2: removeCopy(cnt, cntN, mig, l, a1); removeCopy(cnt, cntN, nat, l, a0); break;
+				case 3: removeCopy(cnt, cntN, mig, l, a0); break;
+				case 4: removeCopy(cnt, cntN, nat, l, a0); break;
+				default:  // age-2 homozygote: one copy to each population
+					if (a1 != HEMIZYGOUS && a0 >= 0 && a1 >= 0)
+					{ removeCopy(cnt, cntN, mig, l, a0); removeCopy(cnt, cntN, nat, l, a0); }
+					break;
+			}
+		}
+	}
 }
 
 int main( int argc, char *argv[] )
@@ -1031,7 +1146,15 @@ common_processing:
 
 	// Sex-biased dispersal model setup. Active only when sex metadata was
 	// supplied (indivToSex non-empty). Requires complete sex information.
+	// The collapsed sampler (Phase 3) supports the base migration model only, so
+	// the sex-biased model is disabled under --collapse for now.
 	bool sexBiasModel = !indivToSex.empty();
+	if (gArgs.collapse && sexBiasModel)
+	{
+		std::cerr << "\nnote: --collapse currently supports the base migration model only;"
+		             " the sex-biased dispersal model is disabled for this run.\n";
+		sexBiasModel = false;
+	}
 	// Sex ratios (female fractions): movement dispersal (age-1 migrants), effective
 	// gene flow (age-2 migrant parents = migrants that also bred), and residents.
 	double phiMove = 0.5;             // female fraction of age-1 migrants (movement)
@@ -1280,54 +1403,55 @@ common_processing:
 	for(unsigned int i = 0; i < noIndiv; i++)
 		sampleIndiv[i].logL = logLik(sampleIndiv[i],alleleFreqs,logAlleleFreqs,FStat,log1MinusFStat,noLoci);
 
-	// Collapsed sampler Phase 1: build the count tables from the initial
-	// all-native state and report the Dirichlet-multinomial marginal (for
-	// validation against an independent computation). Diagnostic only; does not
-	// affect the sampler.
+	// Collapsed sampler: persistent count tables (gCount/gCountN) and per-age-2
+	// phase store (gAssign), initialised from the all-native state. These are
+	// maintained through the MCMC (Phase 3). Also runs the Phase 1/2 validation
+	// gates. All null / unused unless --collapse.
+	long ***gCount = nullptr;
+	long **gCountN = nullptr;
+	unsigned char **gAssign = nullptr;
 	if(gArgs.collapse)
 	{
-		long ***cnt = new long**[noPopln];
-		long **cntN = new long*[noPopln];
+		gCount = new long**[noPopln];
+		gCountN = new long*[noPopln];
 		for(unsigned int p = 0; p < noPopln; p++)
 		{
-			cnt[p] = new long*[noLoci];
-			cntN[p] = new long[noLoci];
+			gCount[p] = new long*[noLoci];
+			gCountN[p] = new long[noLoci];
 			for(unsigned int l = 0; l < noLoci; l++)
-				cnt[p][l] = new long[noAlleles[l] > 0 ? noAlleles[l] : 1];
+				gCount[p][l] = new long[noAlleles[l] > 0 ? noAlleles[l] : 1];
 		}
-		initCountsNative(cnt, cntN, sampleIndiv, noIndiv, noLoci, noAlleles, noPopln);
-		double cll = collapsedLogLik(cnt, cntN, noPopln, noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
+		gAssign = new unsigned char*[noIndiv];
+		for(unsigned int i = 0; i < noIndiv; i++)
+		{
+			gAssign[i] = new unsigned char[noLoci];
+			for(unsigned int l = 0; l < noLoci; l++) gAssign[i][l] = 0;
+		}
+		initCountsNative(gCount, gCountN, sampleIndiv, noIndiv, noLoci, noAlleles, noPopln);
+		double cll = collapsedLogLik(gCount, gCountN, noPopln, noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
 		std::cout << "collapsed init logL (Dirichlet-multinomial, alpha="
 		          << ALLELE_PRIOR_ALPHA << "): " << std::setprecision(8) << cll << "\n";
 
-		// Phase-2 gate: for each individual, remove it and check that
-		// computeAddLogProb equals the full-recompute marginal difference; then
-		// add it back and confirm the counts (and marginal) are restored exactly.
+		// Phase-2 gate (init state is all-native, so gAssign is unused here).
 		{
 			double base = cll, maxDiff = 0.0;
 			unsigned int cap = noIndiv < 200 ? noIndiv : 200;   // bound the O(P*L) recomputes
 			for(unsigned int i = 0; i < cap; i++)
 			{
-				removeIndividual(cnt, cntN, sampleIndiv[i], noLoci);
-				double without = collapsedLogLik(cnt, cntN, noPopln, noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
-				double dadd = computeAddLogProb(cnt, cntN, sampleIndiv[i], noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
+				removeIndividual(gCount, gCountN, sampleIndiv[i], gAssign[i], noLoci);
+				double without = collapsedLogLik(gCount, gCountN, noPopln, noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
+				double dadd = computeAddLogProb(gCount, gCountN, sampleIndiv[i], noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
 				double d = std::fabs(base - (without + dadd));
 				if(d > maxDiff) maxDiff = d;
-				addIndividual(cnt, cntN, sampleIndiv[i], noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
+				addIndividual(gCount, gCountN, sampleIndiv[i], gAssign[i], noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
 			}
-			double restored = collapsedLogLik(cnt, cntN, noPopln, noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
+			double restored = collapsedLogLik(gCount, gCountN, noPopln, noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
 			std::cout << "collapsed Phase-2 gate: max|addLogProb - recompute| = "
 			          << std::scientific << maxDiff << ", restored logL diff = "
 			          << std::fabs(restored - base) << std::fixed
 			          << "  -> " << ((maxDiff < 1e-6 && std::fabs(restored - base) < 1e-6) ? "PASS" : "FAIL")
 			          << "\n";
 		}
-		for(unsigned int p = 0; p < noPopln; p++)
-		{
-			for(unsigned int l = 0; l < noLoci; l++) delete[] cnt[p][l];
-			delete[] cnt[p]; delete[] cntN[p];
-		}
-		delete[] cnt; delete[] cntN;
 	}
 
 	if(gArgs.debug)
@@ -1473,8 +1597,22 @@ if(!NOANCMCMC)
 		// calculate change of logL for genetic data with new migrant ancestry
 		if (!NOLIKELIHOOD)
 		{
-			logLprop = logLik(tempIndiv,alleleFreqs,logAlleleFreqs,FStat,log1MinusFStat,noLoci);
-			dtLogL = logLprop - sampleIndiv[chosenIndiv].logL;
+			if (gArgs.collapse)
+			{
+				// Collapsed: remove the chosen individual from the count tables,
+				// then the genotype-likelihood ratio is the difference of the
+				// (phase-marginalized) add-log-probs for the proposed vs current
+				// ancestry on the without-i counts. Re-added below (accept/reject).
+				removeIndividual(gCount, gCountN, sampleIndiv[chosenIndiv], gAssign[chosenIndiv], noLoci);
+				double dcur  = computeAddLogProb(gCount, gCountN, sampleIndiv[chosenIndiv], noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
+				double dprop = computeAddLogProb(gCount, gCountN, tempIndiv, noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
+				dtLogL = dprop - dcur;
+			}
+			else
+			{
+				logLprop = logLik(tempIndiv,alleleFreqs,logAlleleFreqs,FStat,log1MinusFStat,noLoci);
+				dtLogL = logLprop - sampleIndiv[chosenIndiv].logL;
+			}
 		}
 
 		// calculate change of logPr for migrant counts with new migrant ancestry
@@ -1556,12 +1694,18 @@ if(!NOANCMCMC)
 			sampleIndiv[chosenIndiv].migrantAge = tempIndiv.migrantAge;
 			sampleIndiv[chosenIndiv].migrantPopln = tempIndiv.migrantPopln;
 			sampleIndiv[chosenIndiv].migrantSex = tempIndiv.migrantSex;
-			if (!NOLIKELIHOOD)
+			if (!NOLIKELIHOOD && !gArgs.collapse)
 				sampleIndiv[chosenIndiv].logL = logLprop;
 			fillMigrantCounts(sampleIndiv,migrantCounts,noIndiv,noPopln);
 			ancestryAcceptRate = (1.0/i)+((i-1.0)/i)*ancestryAcceptRate;
 		}
 		else ancestryAcceptRate = ((i-1.0)/i)*ancestryAcceptRate;
+
+		// Collapsed: re-add the chosen individual under its final ancestry
+		// (proposed if accepted, current if rejected), sampling the age-2 phase.
+		if (gArgs.collapse && !NOLIKELIHOOD)
+			addIndividual(gCount, gCountN, sampleIndiv[chosenIndiv], gAssign[chosenIndiv],
+			              noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
 }
 
 if(!NOMIGRATEMCMC)
@@ -1630,7 +1774,7 @@ if(!NOMIGRATEMCMC)
 
 }
 
-if(!NOALLELEMCMC)
+if(!NOALLELEMCMC && !gArgs.collapse)
 {
 
 	/* propose a change to a population allele frequency */
@@ -1731,7 +1875,7 @@ if(!NOALLELEMCMC)
 
 }
 
-if(!NOFSTATMCMC)
+if(!NOFSTATMCMC && !gArgs.collapse)
 {
 	/* propose a change to a population inbreeding coefficient */
 
@@ -1802,7 +1946,7 @@ if(!NOFSTATMCMC)
 	if (gArgs.autotune && i <= (unsigned int)gArgs.burnin) tuneWindowFStatTotal++;
 }
 
-if(!NOMISSINGDATA)
+if(!NOMISSINGDATA && !gArgs.collapse)
 {
 	/* propose a change to a missing genotype */
 	if(noMissingGenotypes>0)
@@ -2583,6 +2727,19 @@ mcmcout << "\n Population Labels:\n";
 	delete[] logAlleleFreqs;
 	delete[] avgAlleleFreqs;
 	delete[] varAlleleFreqs;
+
+	// Free collapsed-sampler count tables and phase store
+	if(gArgs.collapse && gCount != nullptr)
+	{
+		for(unsigned int p = 0; p < noPopln; p++)
+		{
+			for(unsigned int l = 0; l < noLoci; l++) delete[] gCount[p][l];
+			delete[] gCount[p]; delete[] gCountN[p];
+		}
+		delete[] gCount; delete[] gCountN;
+		for(unsigned int i = 0; i < noIndiv; i++) delete[] gAssign[i];
+		delete[] gAssign;
+	}
 
 	// Free migrationRates, avgMigrationRates, varMigrationRates (2D arrays: noPopln x noPopln+1)
 	for(unsigned int i = 0; i < noPopln; i++)
