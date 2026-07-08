@@ -536,6 +536,55 @@ void readVCFFile(const char *vcfFileName,
 }
 
 //=============================================================================
+// Collapsed sampler (integrating out allele frequencies), Phase 1: count tables
+// and the Dirichlet-multinomial marginal. See doc/collapsed_allele_freqs_plan.md.
+//=============================================================================
+
+// Tally gene copies from the current ALL-NATIVE state (every individual's copies
+// assigned to its sampled population) into cnt[p][l][a] and cntN[p][l]. A diploid
+// genotype contributes two copies; a hemizygous male X (second slot HEMIZYGOUS)
+// or a missing copy (value < 0) contributes one/none.
+static void initCountsNative(long ***cnt, long **cntN, indiv *ind, unsigned int noIndiv,
+                             unsigned int noLoci, unsigned int *noAlleles, unsigned int noPopln)
+{
+	for (unsigned int p = 0; p < noPopln; p++)
+		for (unsigned int l = 0; l < noLoci; l++)
+		{
+			cntN[p][l] = 0;
+			unsigned int A = noAlleles[l] ? noAlleles[l] : 1;
+			for (unsigned int a = 0; a < A; a++) cnt[p][l][a] = 0;
+		}
+	for (unsigned int i = 0; i < noIndiv; i++)
+	{
+		unsigned int p = ind[i].samplePopln;   // initial state: all native
+		const GenotypeType (*g)[2] = ind[i].genotype;
+		for (unsigned int l = 0; l < noLoci; l++)
+		{
+			int a0 = g[l][0], a1 = g[l][1];
+			if (a0 >= 0) { cnt[p][l][a0]++; cntN[p][l]++; }
+			if (a1 >= 0) { cnt[p][l][a1]++; cntN[p][l]++; }
+		}
+	}
+}
+
+// Dirichlet-multinomial (Polya) log-marginal of the genotype counts, integrating
+// out the population allele frequencies under a symmetric Dirichlet(alpha) prior.
+static double collapsedLogLik(long ***cnt, long **cntN, unsigned int noPopln,
+                              unsigned int noLoci, unsigned int *noAlleles, double alpha)
+{
+	double lp = 0.0;
+	for (unsigned int p = 0; p < noPopln; p++)
+		for (unsigned int l = 0; l < noLoci; l++)
+		{
+			unsigned int A = noAlleles[l];
+			if (A == 0) continue;
+			long N = cntN[p][l];
+			lp += lgamma(A * alpha) - lgamma(A * alpha + (double) N);
+			for (unsigned int a = 0; a < A; a++)
+				lp += lgamma(alpha + (double) cnt[p][l][a]) - lgamma(alpha);
+		}
+	return lp;
+}
 
 int main( int argc, char *argv[] )
 {
@@ -1157,6 +1206,33 @@ common_processing:
 
 	for(unsigned int i = 0; i < noIndiv; i++)
 		sampleIndiv[i].logL = logLik(sampleIndiv[i],alleleFreqs,logAlleleFreqs,FStat,log1MinusFStat,noLoci);
+
+	// Collapsed sampler Phase 1: build the count tables from the initial
+	// all-native state and report the Dirichlet-multinomial marginal (for
+	// validation against an independent computation). Diagnostic only; does not
+	// affect the sampler.
+	if(gArgs.collapse)
+	{
+		long ***cnt = new long**[noPopln];
+		long **cntN = new long*[noPopln];
+		for(unsigned int p = 0; p < noPopln; p++)
+		{
+			cnt[p] = new long*[noLoci];
+			cntN[p] = new long[noLoci];
+			for(unsigned int l = 0; l < noLoci; l++)
+				cnt[p][l] = new long[noAlleles[l] > 0 ? noAlleles[l] : 1];
+		}
+		initCountsNative(cnt, cntN, sampleIndiv, noIndiv, noLoci, noAlleles, noPopln);
+		double cll = collapsedLogLik(cnt, cntN, noPopln, noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
+		std::cout << "collapsed init logL (Dirichlet-multinomial, alpha="
+		          << ALLELE_PRIOR_ALPHA << "): " << std::setprecision(8) << cll << "\n";
+		for(unsigned int p = 0; p < noPopln; p++)
+		{
+			for(unsigned int l = 0; l < noLoci; l++) delete[] cnt[p][l];
+			delete[] cnt[p]; delete[] cntN[p];
+		}
+		delete[] cnt; delete[] cntN;
+	}
 
 	if(gArgs.debug)
 	{
