@@ -1324,8 +1324,6 @@ common_processing:
 			          << xLoci.size() << " X-linked loci\n\n";
 	}
 
-	size_t N=noIndiv;
-	gsl_permutation * p = gsl_permutation_alloc (N);
 
 	if (gArgs.verbose)
 	{
@@ -1544,6 +1542,28 @@ common_processing:
 		sampleIndiv[l].migrantSex=SEX_UNKNOWN; }
 	fillMigrantCounts(sampleIndiv,migrantCounts,noIndiv,noPopln);
 
+	// Per-category index lists for O(1) uniform selection of an individual in a
+	// (samplePopln, migrantPopln, migrantAge) category, replacing the old per-
+	// iteration O(N) gsl_ran_shuffle + scan. catOf/catPos give O(1) removal
+	// (swap-with-last); migrantCounts is then maintained incrementally alongside,
+	// retiring the O(N) fillMigrantCounts after each accepted ancestry move.
+	auto catIndex = [noPopln](unsigned int sp, unsigned int mp, unsigned int age) -> int
+	{ return (int)((sp * (unsigned int)noPopln + mp) * 3 + age); };
+	std::vector<std::vector<int> > catList((size_t)noPopln * noPopln * 3);
+	std::vector<int> catOf(noIndiv), catPos(noIndiv);
+	for (unsigned int i = 0; i < noIndiv; i++)
+	{
+		int c = catIndex(sampleIndiv[i].samplePopln, sampleIndiv[i].migrantPopln, sampleIndiv[i].migrantAge);
+		catOf[i] = c; catPos[i] = (int)catList[c].size(); catList[c].push_back((int)i);
+	}
+	auto catRemove = [&](int i)
+	{
+		int c = catOf[i], pos = catPos[i], last = catList[c].back();
+		catList[c][pos] = last; catPos[last] = pos; catList[c].pop_back();
+	};
+	auto catAdd = [&](int i, int c)
+	{ catOf[i] = c; catPos[i] = (int)catList[c].size(); catList[c].push_back(i); };
+
 	for(unsigned int i = 0; i < noIndiv; i++)
 		sampleIndiv[i].logL = logLik(sampleIndiv[i],alleleFreqs,logAlleleFreqs,FStat,log1MinusFStat,noLoci);
 
@@ -1641,7 +1661,6 @@ common_processing:
 	indiv tempIndiv;
 	tempIndiv.genotype = new GenotypeType[noLoci][2];
 
-	gsl_permutation_init (p);
 
 	// Print pre-run summary
 	std::cout << "  Run Configuration:\n";
@@ -1688,16 +1707,11 @@ if(!NOANCMCMC)
 		samplePopln = gsl_rng_uniform_int(r, noPopln);
 
 		proposeMigrantAncDrop(migrantPopln, migrantAge, samplePopln, noPopln, migrantCounts);
-		gsl_ran_shuffle (r, p->data, N, sizeof(size_t));
-		bool foundIndiv=false;
-		int k=0;
-		while (!foundIndiv)
+		// O(1) uniform pick among individuals in the proposed drop category
+		// (proposeMigrantAncDrop guarantees a non-empty category, so size > 0).
 		{
-			if((sampleIndiv[gsl_permutation_get(p,k)].migrantPopln == migrantPopln)&&
-			   (sampleIndiv[gsl_permutation_get(p,k)].migrantAge == migrantAge)&&
-			   (sampleIndiv[gsl_permutation_get(p,k)].samplePopln == samplePopln))
-			{ chosenIndiv=gsl_permutation_get(p,k); foundIndiv = true; }
-			else { k++; }
+			const std::vector<int>& cl = catList[catIndex(samplePopln, migrantPopln, migrantAge)];
+			chosenIndiv = cl[gsl_rng_uniform_int(r, cl.size())];
 		}
 		proposeMigrantAncAdd(migrantPopAdd, migrantAgeAdd,migrantPopln, migrantAge, samplePopln, noPopln);
 
@@ -1838,12 +1852,20 @@ if(!NOANCMCMC)
 
 		if(alpha <= exp(logPrMHR))
 		{
+			unsigned int oldMigPopln = sampleIndiv[chosenIndiv].migrantPopln;
+			unsigned int oldMigAge   = sampleIndiv[chosenIndiv].migrantAge;
 			sampleIndiv[chosenIndiv].migrantAge = tempIndiv.migrantAge;
 			sampleIndiv[chosenIndiv].migrantPopln = tempIndiv.migrantPopln;
 			sampleIndiv[chosenIndiv].migrantSex = tempIndiv.migrantSex;
 			if (!NOLIKELIHOOD && !gArgs.collapse)
 				sampleIndiv[chosenIndiv].logL = logLprop;
-			fillMigrantCounts(sampleIndiv,migrantCounts,noIndiv,noPopln);
+			// O(1) incremental update of migrant counts and category lists
+			// (replaces the O(N) fillMigrantCounts re-tally). samplePopln equals
+			// sampleIndiv[chosenIndiv].samplePopln (selection was from that category).
+			migrantCounts[samplePopln][oldMigPopln][oldMigAge]--;
+			migrantCounts[samplePopln][tempIndiv.migrantPopln][tempIndiv.migrantAge]++;
+			catRemove((int)chosenIndiv);
+			catAdd((int)chosenIndiv, catIndex(samplePopln, tempIndiv.migrantPopln, tempIndiv.migrantAge));
 			ancestryAcceptRate = (1.0/i)+((i-1.0)/i)*ancestryAcceptRate;
 		}
 		else ancestryAcceptRate = ((i-1.0)/i)*ancestryAcceptRate;
@@ -2988,7 +3010,6 @@ mcmcout << "\n Population Labels:\n";
 	freeSavageDickeyStats(sdStats, noPopln);
 
 	// Free GSL objects
-	gsl_permutation_free(p);
 	gsl_rng_free(r);
 
 	mcmcout.close();
