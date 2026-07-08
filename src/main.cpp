@@ -612,30 +612,48 @@ static inline unsigned int copyPop(const indiv& ind)
 //   3 = age-2 hemizygous male X, single copy -> source
 //   4 = age-2 hemizygous male X, single copy -> native
 
+// z-marginalized predictive of a same-population diploid genotype (a0,a1) drawn
+// from pop p at locus l, given inbreeding F. Read-only (analytic; equals the
+// Phase-3 two-copy count-marginal when F = 0). Homozygote: F/(1-F) mixes a single
+// IBD copy vs two independent copies; het: always outbred.
+static double genoPred(long ***cnt, long **cntN, unsigned int p, unsigned int l,
+                       int a0, int a1, unsigned int A, double alpha, double F)
+{
+	double N   = cntN[p][l] + A * alpha;
+	double Np1 = cntN[p][l] + 1 + A * alpha;
+	if (a0 == a1)
+	{
+		double r  = (cnt[p][l][a0] + alpha) / N;
+		double r2 = (cnt[p][l][a0] + 1 + alpha) / Np1;
+		return F * r + (1.0 - F) * r * r2;
+	}
+	return (1.0 - F) * (cnt[p][l][a0] + alpha) / N * (cnt[p][l][a1] + alpha) / Np1;
+}
+
 // Change in the collapsed log-marginal from ADDING individual i's gene copies
-// under its ancestry, given the current (without-i) counts. Read-only. Age-2
-// marginalizes the latent phase (a priori 1/2 each). For age 0/1, copies to the
-// same cell are sequenced (mutate-then-restore) so the ratio sees the increment.
+// under its ancestry, given the current (without-i) counts. Read-only. Age 0/1
+// diploid genotypes marginalize the IBD indicator (genoPred, inbreeding F);
+// age-2 marginalizes the latent phase (a priori 1/2 each).
 static double computeAddLogProb(long ***cnt, long **cntN, const indiv& ind,
-                                unsigned int noLoci, unsigned int *noAlleles, double alpha)
+                                unsigned int noLoci, unsigned int *noAlleles, double alpha,
+                                double *FStat)
 {
 	const GenotypeType (*g)[2] = ind.genotype;
 	double dl = 0.0;
 	if (ind.migrantAge != 2)
 	{
 		unsigned int p = copyPop(ind);
+		double F = FStat[p];
 		for (unsigned int l = 0; l < noLoci; l++)
 		{
 			unsigned int A = noAlleles[l]; if (A == 0) continue;
 			int a0 = g[l][0], a1 = g[l][1];
-			if (a0 >= 0) { dl += log(addRatio(cnt, cntN, p, l, a0, A, alpha)); addCopy(cnt, cntN, p, l, a0); }
-			if (a1 >= 0) { dl += log(addRatio(cnt, cntN, p, l, a1, A, alpha)); addCopy(cnt, cntN, p, l, a1); }
-		}
-		for (unsigned int l = 0; l < noLoci; l++)   // restore
-		{
-			int a0 = g[l][0], a1 = g[l][1];
-			if (a1 >= 0) removeCopy(cnt, cntN, p, l, a1);
-			if (a0 >= 0) removeCopy(cnt, cntN, p, l, a0);
+			if (a1 == HEMIZYGOUS || (a0 >= 0 && a1 < 0))       // hemizygous male X: single copy
+			{
+				if (a0 >= 0) dl += log(addRatio(cnt, cntN, p, l, a0, A, alpha));
+			}
+			else if (a0 >= 0 && a1 >= 0)
+				dl += log(genoPred(cnt, cntN, p, l, a0, a1, A, alpha, F));
 		}
 	}
 	else   // age 2: one copy from source (mig), one from native (nat); distinct cells
@@ -674,24 +692,48 @@ static double computeAddLogProb(long ***cnt, long **cntN, const indiv& ind,
 	return dl;
 }
 
-// Permanently ADD individual i's gene copies, sampling the age-2 latent phase
-// per locus (stored in assign[]) so removeIndividual can undo it. Returns the
-// same (phase-marginalized) log-prob as computeAddLogProb.
+// Permanently ADD individual i's gene copies, sampling the latent per-locus
+// codes (stored in assign[]) so removeIndividual can undo it: for age 0/1 a
+// homozygous diploid locus draws its IBD indicator (assign=1 if IBD, one copy;
+// assign=0 if outbred, two copies); for age 2, the phase (codes 1-4).
 static double addIndividual(long ***cnt, long **cntN, const indiv& ind, unsigned char *assign,
-                            unsigned int noLoci, unsigned int *noAlleles, double alpha)
+                            unsigned int noLoci, unsigned int *noAlleles, double alpha,
+                            double *FStat)
 {
 	const GenotypeType (*g)[2] = ind.genotype;
 	double dl = 0.0;
 	if (ind.migrantAge != 2)
 	{
 		unsigned int p = copyPop(ind);
+		double F = FStat[p];
 		for (unsigned int l = 0; l < noLoci; l++)
 		{
-			unsigned int A = noAlleles[l]; if (A == 0) { assign[l] = 0; continue; }
-			int a0 = g[l][0], a1 = g[l][1];
-			if (a0 >= 0) { dl += log(addRatio(cnt, cntN, p, l, a0, A, alpha)); addCopy(cnt, cntN, p, l, a0); }
-			if (a1 >= 0) { dl += log(addRatio(cnt, cntN, p, l, a1, A, alpha)); addCopy(cnt, cntN, p, l, a1); }
 			assign[l] = 0;
+			unsigned int A = noAlleles[l]; if (A == 0) continue;
+			int a0 = g[l][0], a1 = g[l][1];
+			if (a1 == HEMIZYGOUS || (a0 >= 0 && a1 < 0))       // hemizygous male X: single copy
+			{
+				if (a0 >= 0) { dl += log(addRatio(cnt, cntN, p, l, a0, A, alpha)); addCopy(cnt, cntN, p, l, a0); }
+			}
+			else if (a0 >= 0 && a1 >= 0)
+			{
+				if (a0 == a1)   // homozygote: sample the IBD indicator
+				{
+					double rr  = addRatio(cnt, cntN, p, l, a0, A, alpha);
+					double rr2 = (cnt[p][l][a0] + 1 + alpha) / (cntN[p][l] + 1 + A * alpha);
+					double pz1 = F * rr, pz0 = (1.0 - F) * rr * rr2;
+					dl += log(pz1 + pz0);
+					if (gsl_rng_uniform(r) < pz1 / (pz1 + pz0))
+					{ addCopy(cnt, cntN, p, l, a0); assign[l] = 1; }          // IBD: one copy
+					else
+					{ addCopy(cnt, cntN, p, l, a0); addCopy(cnt, cntN, p, l, a0); }  // outbred: two copies
+				}
+				else            // het: always outbred, two copies
+				{
+					dl += log(addRatio(cnt, cntN, p, l, a0, A, alpha)); addCopy(cnt, cntN, p, l, a0);
+					dl += log(addRatio(cnt, cntN, p, l, a1, A, alpha)); addCopy(cnt, cntN, p, l, a1);
+				}
+			}
 		}
 	}
 	else
@@ -749,8 +791,19 @@ static void removeIndividual(long ***cnt, long **cntN, const indiv& ind,
 		for (unsigned int l = 0; l < noLoci; l++)
 		{
 			int a0 = g[l][0], a1 = g[l][1];
-			if (a0 >= 0) removeCopy(cnt, cntN, p, l, a0);
-			if (a1 >= 0) removeCopy(cnt, cntN, p, l, a1);
+			if (a1 == HEMIZYGOUS || (a0 >= 0 && a1 < 0))       // hemizygous male X: one copy
+			{
+				if (a0 >= 0) removeCopy(cnt, cntN, p, l, a0);
+			}
+			else if (a0 >= 0 && a1 >= 0)
+			{
+				if (a0 == a1)                    // homozygote: 1 copy if IBD, else 2
+				{
+					removeCopy(cnt, cntN, p, l, a0);
+					if (assign[l] != 1) removeCopy(cnt, cntN, p, l, a0);
+				}
+				else { removeCopy(cnt, cntN, p, l, a0); removeCopy(cnt, cntN, p, l, a1); }
+			}
 		}
 	}
 	else
@@ -772,6 +825,45 @@ static void removeIndividual(long ***cnt, long **cntN, const indiv& ind,
 			}
 		}
 	}
+}
+
+// Inbreeding update (collapsed sampler). Gibbs-resample the IBD indicator of
+// every same-population diploid homozygous genotype (age 0/1), keeping the count
+// tables consistent, then draw each population's F from its Beta full-conditional
+// F_p ~ Beta(1 + #IBD, 1 + #diploid - #IBD). Heterozygotes are outbred (z fixed 0)
+// but still count as trials. O(noIndiv * noLoci).
+static void inbreedingUpdate(long ***cnt, long **cntN, indiv *ind, unsigned char **assign,
+                             unsigned int noIndiv, unsigned int noLoci, unsigned int *noAlleles,
+                             unsigned int noPopln, double alpha, double *FStat)
+{
+	std::vector<long> zSum(noPopln, 0), zTrials(noPopln, 0);
+	for (unsigned int i = 0; i < noIndiv; i++)
+	{
+		if (ind[i].migrantAge == 2) continue;      // hybrids are outbred (no F)
+		unsigned int p = copyPop(ind[i]);
+		double F = FStat[p];
+		const GenotypeType (*g)[2] = ind[i].genotype;
+		for (unsigned int l = 0; l < noLoci; l++)
+		{
+			unsigned int A = noAlleles[l]; if (A == 0) continue;
+			int a0 = g[l][0], a1 = g[l][1];
+			if (a1 == HEMIZYGOUS || a0 < 0 || a1 < 0) continue;   // not a diploid genotype
+			zTrials[p]++;
+			if (a0 != a1) { assign[i][l] = 0; continue; }          // het: outbred
+			// homozygote: remove its current contribution, resample IBD, re-add
+			removeCopy(cnt, cntN, p, l, a0);
+			if (assign[i][l] != 1) removeCopy(cnt, cntN, p, l, a0);
+			double rr  = (cnt[p][l][a0] + alpha) / (cntN[p][l] + A * alpha);
+			double rr2 = (cnt[p][l][a0] + 1 + alpha) / (cntN[p][l] + 1 + A * alpha);
+			double pz1 = F * rr, pz0 = (1.0 - F) * rr * rr2;
+			if (gsl_rng_uniform(r) < pz1 / (pz1 + pz0))
+			{ addCopy(cnt, cntN, p, l, a0); assign[i][l] = 1; zSum[p]++; }
+			else
+			{ addCopy(cnt, cntN, p, l, a0); addCopy(cnt, cntN, p, l, a0); assign[i][l] = 0; }
+		}
+	}
+	for (unsigned int p = 0; p < noPopln; p++)
+		FStat[p] = gsl_ran_beta(r, 1.0 + (double) zSum[p], 1.0 + (double)(zTrials[p] - zSum[p]));
 }
 
 int main( int argc, char *argv[] )
@@ -1440,10 +1532,10 @@ common_processing:
 			{
 				removeIndividual(gCount, gCountN, sampleIndiv[i], gAssign[i], noLoci);
 				double without = collapsedLogLik(gCount, gCountN, noPopln, noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
-				double dadd = computeAddLogProb(gCount, gCountN, sampleIndiv[i], noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
+				double dadd = computeAddLogProb(gCount, gCountN, sampleIndiv[i], noLoci, noAlleles, ALLELE_PRIOR_ALPHA, FStat);
 				double d = std::fabs(base - (without + dadd));
 				if(d > maxDiff) maxDiff = d;
-				addIndividual(gCount, gCountN, sampleIndiv[i], gAssign[i], noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
+				addIndividual(gCount, gCountN, sampleIndiv[i], gAssign[i], noLoci, noAlleles, ALLELE_PRIOR_ALPHA, FStat);
 			}
 			double restored = collapsedLogLik(gCount, gCountN, noPopln, noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
 			std::cout << "collapsed Phase-2 gate: max|addLogProb - recompute| = "
@@ -1604,8 +1696,8 @@ if(!NOANCMCMC)
 				// (phase-marginalized) add-log-probs for the proposed vs current
 				// ancestry on the without-i counts. Re-added below (accept/reject).
 				removeIndividual(gCount, gCountN, sampleIndiv[chosenIndiv], gAssign[chosenIndiv], noLoci);
-				double dcur  = computeAddLogProb(gCount, gCountN, sampleIndiv[chosenIndiv], noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
-				double dprop = computeAddLogProb(gCount, gCountN, tempIndiv, noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
+				double dcur  = computeAddLogProb(gCount, gCountN, sampleIndiv[chosenIndiv], noLoci, noAlleles, ALLELE_PRIOR_ALPHA, FStat);
+				double dprop = computeAddLogProb(gCount, gCountN, tempIndiv, noLoci, noAlleles, ALLELE_PRIOR_ALPHA, FStat);
 				dtLogL = dprop - dcur;
 			}
 			else
@@ -1705,7 +1797,7 @@ if(!NOANCMCMC)
 		// (proposed if accepted, current if rejected), sampling the age-2 phase.
 		if (gArgs.collapse && !NOLIKELIHOOD)
 			addIndividual(gCount, gCountN, sampleIndiv[chosenIndiv], gAssign[chosenIndiv],
-			              noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
+			              noLoci, noAlleles, ALLELE_PRIOR_ALPHA, FStat);
 }
 
 if(!NOMIGRATEMCMC)
@@ -1945,6 +2037,17 @@ if(!NOFSTATMCMC && !gArgs.collapse)
 		FStatAcceptRate = ((i-1.0)/i)*FStatAcceptRate;
 	if (gArgs.autotune && i <= (unsigned int)gArgs.burnin) tuneWindowFStatTotal++;
 }
+
+// Collapsed sampler: inbreeding via the IBD-indicator Gibbs (replaces the FStat
+// MH), keeping the count tables consistent and drawing F from its conjugate Beta.
+// The full sweep is O(noIndiv*noLoci), so it is run once every noIndiv iterations
+// (amortized O(noLoci), matching the ancestry move); F is a strong all-data Gibbs
+// so this periodic cadence mixes well. Individuals whose ancestry changes have
+// their IBD indicators resampled by addIndividual in the meantime.
+if(gArgs.collapse && !NOLIKELIHOOD && !NOFSTATMCMC
+   && (i % (noIndiv > 1 ? noIndiv : 1) == 0))
+	inbreedingUpdate(gCount, gCountN, sampleIndiv, gAssign, noIndiv, noLoci,
+	                 noAlleles, noPopln, ALLELE_PRIOR_ALPHA, FStat);
 
 if(!NOMISSINGDATA && !gArgs.collapse)
 {

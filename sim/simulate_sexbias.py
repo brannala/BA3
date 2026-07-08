@@ -72,6 +72,16 @@ def copy(freq, rng):
     return 1 if rng.random() < freq else 0
 
 
+def diploid(freq, F, rng):
+    """Draw a within-population diploid genotype with inbreeding F: with prob F
+    the two copies are identical by descent (a single draw, homozygous), else
+    two independent draws."""
+    if F > 0 and rng.random() < F:
+        a = copy(freq, rng)
+        return a, a
+    return copy(freq, rng), copy(freq, rng)
+
+
 def assign_ancestry(s, npop, m, gamma, rng):
     """Draw (age, source) for one individual in population s, using BA3's
     migrant-ancestry multinomial with a migrant breeding-success multiplier
@@ -127,6 +137,7 @@ def simulate(args):
     # Movement vs gene-flow sex ratios (fall back to --phi if not given).
     phi_move = args.phi_move if args.phi_move is not None else args.phi
     phi_breed = args.phi_breed if args.phi_breed is not None else args.phi
+    F = args.inbreeding                      # within-population inbreeding coefficient
 
     for s in range(npop):
         for k in range(args.nind):
@@ -156,11 +167,11 @@ def simulate(args):
             for l in range(args.nauto):
                 fs = auto_freq[l][s]
                 if age == 0:
-                    a0, a1 = copy(fs, rng), copy(fs, rng)
+                    a0, a1 = diploid(fs, F, rng)
                 elif age == 1:
                     fb = auto_freq[l][source]
-                    a0, a1 = copy(fb, rng), copy(fb, rng)
-                else:  # age 2 hybrid: one source copy, one native copy
+                    a0, a1 = diploid(fb, F, rng)
+                else:  # age 2 hybrid: one source copy, one native copy (outbred)
                     fb = auto_freq[l][source]
                     a0, a1 = copy(fb, rng), copy(fs, rng)
                 g_auto.append((a0, a1))
@@ -173,10 +184,10 @@ def simulate(args):
                 fb = x_freq[l][source] if source is not None else None
                 if sex == "F":
                     if age == 0:
-                        a0, a1 = copy(fs, rng), copy(fs, rng)
+                        a0, a1 = diploid(fs, F, rng)
                     elif age == 1:
-                        a0, a1 = copy(fb, rng), copy(fb, rng)
-                    else:  # age 2 female: one source X, one native X
+                        a0, a1 = diploid(fb, F, rng)
+                    else:  # age 2 female: one source X, one native X (outbred)
                         a0, a1 = copy(fb, rng), copy(fs, rng)
                     g_x.append((a0, a1))
                 else:  # male: single (hemizygous) X copy, from his mother
@@ -271,6 +282,8 @@ def main():
                         "2*gamma*m (gamma=1 -> BA3's default 2m). Needs (1+2*gamma)*m*(npop-1) < 1")
     p.add_argument("--nauto", type=int, default=300, help="number of autosomal SNP loci")
     p.add_argument("--nx", type=int, default=150, help="number of X-linked SNP loci")
+    p.add_argument("--inbreeding", type=float, default=0.0,
+                   help="within-population inbreeding coefficient F (0 = HWE)")
     p.add_argument("--fst", type=float, default=0.1,
                    help="Balding-Nichols Fst controlling population differentiation")
     p.add_argument("--fmin", type=float, default=0.05,
@@ -302,7 +315,8 @@ def main():
         "params": {
             "npop": args.npop, "nind_per_pop": args.nind,
             "phi_move": phi_move, "phi_breed": phi_breed,
-            "m": args.m, "gamma": args.breed_mult, "nauto": args.nauto, "nx": args.nx,
+            "m": args.m, "gamma": args.breed_mult, "inbreeding": args.inbreeding,
+            "nauto": args.nauto, "nx": args.nx,
             "fst": args.fst, "fmin": args.fmin, "seed": args.seed,
         },
         "summary": summary,
