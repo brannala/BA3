@@ -127,9 +127,27 @@ the collapsed `sigma` Gibbs all guard `allele < 0`, and BA3's missing-data MH
 missingness does not arise from VCF input. **Note:** the two paths therefore differ
 on missing data — the standard sampler imputes missing genotypes from the current
 (often native) population's frequencies, biasing migration downward, whereas
-collapse marginalizes and stays close to the full-data estimate. On a 15%-missing
-set: full-data m ~= 0.099 (both paths agree), standard-missing ~= 0.077 (biased
-down), collapse-missing ~= 0.088 (near-unbiased).
+collapse marginalizes and stays close to the full-data estimate.
+
+*Missing-data validation (both paths retained; run with matched seeds):*
+
+- **Base model, 40 loci, 15% missing.** Before the fix (frozen random imputation)
+  collapsed vs standard migration diverged, max |z| = 0.60. After the fix they
+  agree within MC error. Anchored to the full-data estimate (m01 ~= 0.099, both
+  paths agree): standard-missing ~= 0.077 (imputation biases it *down*),
+  collapse-missing ~= 0.088 (near-unbiased, stable across 4 seeds).
+- **Sex model, 100 loci (60 auto + 40 X), 15% missing (incl. missing male-X
+  hemizygous loci).** Standard vs collapse agree within MC error on every
+  parameter: `m` (|z| <= 0.14), `rho` (0.00), `phiMove` (0.04), `phiBreed` (0.34),
+  `gamma` (0.50); collapse recovers truth (score_recovery PASS) and runs ~5.7x
+  faster (10 s vs 58 s). Missing male-X copies are handled with no crash and
+  `phiBreed` (informed by the X data) stays well-behaved.
+- **Interpretation.** The imputation bias scales with the fraction of each
+  individual's signal that is missing, so it is pronounced at 40 loci but nearly
+  vanishes at 100 loci (each individual retains enough observed data). General
+  statement: the paths are *not* identical on missing data (exact marginalization
+  vs data-augmentation imputation); collapse is the correct treatment and is never
+  worse; after the freeze-imputation fix both agree within MC error.
 
 **Remaining (user decision).** Whether to (a) delete the now-redundant frequency
 MCMC (`if(!NOALLELEMCMC)` block) + `alleleFreqs`/`logAlleleFreqs`/
