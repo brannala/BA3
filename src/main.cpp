@@ -1011,7 +1011,7 @@ int main( int argc, char *argv[] )
 				std::cout << "  MCMC options:\n";
 				std::cout << "    -T, --autotune    auto-tune mixing parameters during burn-in (default)\n";
 				std::cout << "    -N, --noautotune  disable auto-tuning of mixing parameters\n";
-				std::cout << "    -c, --collapse    integrate out allele frequencies (under development)\n";
+				std::cout << "    -c, --collapse    integrate out allele frequencies (collapsed sampler; faster)\n";
 				exit(0);
 
 			case '?':
@@ -1026,12 +1026,13 @@ int main( int argc, char *argv[] )
 		opt = getopt_long( argc, argv, optString, longOpts, &longIndex );
 	}
 
-	// The collapsed (integrated-allele-frequency) sampler is under development
-	// (see doc/collapsed_allele_freqs_plan.md). Phase 0 wires up the flag only;
-	// no code path branches on it yet, so it is inert for now.
+	// The collapsed (integrated-allele-frequency) sampler analytically marginalizes
+	// the population allele frequencies (Dirichlet-multinomial); see
+	// doc/collapsed_allele_freqs_plan.md. It supports the base migration model, the
+	// inbreeding (F) and sex-biased dispersal extensions, and missing data.
 	if (gArgs.collapse)
-		std::cerr << "\nnote: --collapse requested; the integrated-frequency sampler "
-		             "is under development and not yet active (using the standard sampler).\n";
+		std::cerr << "\nnote: --collapse active; allele frequencies are integrated out "
+		             "(collapsed sampler).\n";
 
 	/* get input file name or validate VCF options */
 	std::map<std::string, std::string> indivToPopln;  // For VCF mode
