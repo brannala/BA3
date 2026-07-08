@@ -179,13 +179,13 @@ opt-in until it has more field mileage. (The `z`-sweep is already thinned to eve
 
 ## Measured performance
 
-Wall-clock, standard vs `--collapse`, matched seed and iteration count:
+Wall-clock, standard vs `--collapse`, matched seed and iteration count (after the
+two optimizations below):
 
 | Dataset | Indiv | Loci (X) | Iters | Standard | Collapse | Speedup |
 |---|---|---|---|---|---|---|
-| Simulated sex-biased | 300 | 100 (40) | 400k | 40 s | 9 s | ~4.3x |
-| Simulated sex-biased, 15% missing | 300 | 100 (40) | 500k | 58 s | 10 s | ~5.7x |
-| Brown bear (de Jong 2023) | 36 | 5102 (2582) | 200k | 51 s | 41 s | ~1.3x |
+| Simulated sex-biased | 300 | 100 (40) | 400k | 39 s | 8 s | ~4.9x |
+| Brown bear (de Jong 2023) | 36 | 5102 (2582) | 200k | 49 s | 30 s | ~1.6x |
 
 **The speedup scales with the individuals-to-loci ratio, not with size.** The
 collapsed sampler's win comes from removing the allele-frequency parameters (and
@@ -194,10 +194,8 @@ outnumber loci. When loci greatly outnumber individuals (the bear set: 36 indiv,
 5102 loci), per-iteration cost is instead dominated by O(loci) passes that *both*
 samplers pay: the collapsed ancestry move makes ~4 loci-passes (remove + evaluate
 current + evaluate proposed + re-add) to the standard move's ~1, and the age-2
-male-X `sigma` Gibbs sweeps all X loci in both modes. Meanwhile the standard
-frequency MCMC it eliminates is already cheap here (one locus per iteration, at
-O(indiv) cost). So collapse still wins, but only modestly (~1.3x) in the
-loci >> indiv regime, versus ~4-6x when indiv >= loci.
+male-X `sigma` Gibbs sweeps all X loci in both modes. So collapse still wins, but
+only modestly (~1.6x) in the loci >> indiv regime, versus ~5x when indiv >= loci.
 
 More precisely, the per-iteration advantage is a sum of terms, not purely O(indiv):
 the removed frequency MCMC saves O(N), the removed `F`-statistic MCMC saves
@@ -207,29 +205,51 @@ and the collapsed ancestry move adds a ~3*O(L) penalty (extra loci-passes). Net
 as N/P exceeds the ancestry penalty (~4). With `-u` (no inbreeding) the O((N/P)*L)
 term drops out and the advantage reverts toward the pure-N frequency term.
 
+### Profiling and optimizations
+
+`sample`-based profiling of the collapsed sampler found two hotspots, in two
+different dataset regimes, both since optimized:
+
+1. **`log()` in the ancestry-move predictive (~36%, loci-bound / bear regime).**
+   With the Dirichlet concentration fixed at `ALLELE_PRIOR_ALPHA = 1`, every count
+   ratio is a ratio of integers, so its log is a difference of precomputed
+   `gLogTab[k] = log(k)` entries. `computeAddLogProb` now uses table-backed
+   `logAddRatioT`/`logGenoPredT` (only the diploid-homozygote IBD mixture keeps one
+   real `log`, which vanishes at F=0), and `addIndividual` -- whose add-log-prob
+   return was unused -- dropped its `log()` work entirely (commit-only). Bear:
+   40.6 s -> 30.4 s.
+2. **O(N) individual selection (~43% at N=400, indiv-bound regime).** The ancestry
+   proposal shuffled all N individuals (`gsl_ran_shuffle`) and scanned for one in a
+   target category, then re-tallied `migrantCounts` over all N on accept. Replaced
+   by per-category index lists (O(1) uniform selection) and incremental count
+   updates. This is *shared* with the standard sampler. It flattened the collapsed
+   run time in N (see below).
+
 ### Scaling in N at fixed L
 
-Why the speedup grows with N: the collapsed run time is *nearly* N-independent,
+Why the speedup grows with N: the collapsed run time is essentially N-independent,
 while the standard run time is ~linear in N. Base model (no sex), L = 100 loci,
-2 populations, 150k iterations, varying total N:
+2 populations, 150k iterations, varying total N (after both optimizations; the
+pre-optimization collapse column is shown for contrast):
 
-| N | Collapse | Standard | std/col |
-|---|---|---|---|
-| 50 | 0.78 s | 2.16 s | 2.8x |
-| 100 | 0.85 s | 5.07 s | 6.0x |
-| 200 | 1.00 s | 11.9 s | 11.9x |
-| 400 | 1.27 s | 26.6 s | 20.9x |
+| N | Collapse | (pre-opt) | Standard | std/col |
+|---|---|---|---|---|
+| 50 | 0.46 s | 0.78 s | 1.94 s | 4.2x |
+| 100 | 0.47 s | 0.85 s | 4.43 s | 9.4x |
+| 200 | 0.50 s | 1.00 s | 10.7 s | 21.5x |
+| 400 | 0.51 s | 1.27 s | 25.5 s | 50.1x |
 
-Collapse moves only 0.78 -> 1.27 s while N grows 8x: it fits `t ~= 0.71 + 0.0014*N`
--- a constant O(L) core (the one-individual ancestry move plus the inbreeding sweep
-thinned to O(L) amortized) plus a *weak* linear-N tail from `fillMigrantCounts`
-(O(N) per accepted ancestry move), sample-point sums over individuals, and (when
-enabled) the O(N) phi/rho Gibbs tally. So the collapsed run time is **not strictly
-independent of N, but only weakly dependent** (constant + small*N). The standard run
-time is ~linear in N (its O(N) frequency MCMC and O((N/P)*L) F-stat MCMC), so the
-ratio -- the speedup -- grows roughly linearly with N (2.8x at N=50 to 21x at
-N=400). This is the same mechanism behind the dataset table above: the bear set
-(N=36) sees a small speedup because standard's N-linear costs are still small there.
+Collapse now moves only 0.46 -> 0.51 s while N grows 8x -- nearly flat. Before
+optimization #2 it fit `t ~= 0.71 + 0.0014*N`, with the linear-N tail coming from
+the O(N) `gsl_ran_shuffle` selection and the O(N) `fillMigrantCounts` re-tally;
+both are now O(1) (per-category index lists + incremental counts), so the tail is
+essentially gone (residual slope ~0.0002*N from sample-point sums and, when the
+sex model is on, the O(N) phi/rho Gibbs tally). The standard run time stays
+~linear in N (its O(N) frequency MCMC and O((N/P)*L) F-stat MCMC), so the speedup
+now grows roughly linearly with N -- ~4x at N=50 to ~50x at N=400 (was ~21x
+pre-optimization). This is the same mechanism behind the dataset table above: the
+bear set (N=36) sees a small speedup because standard's N-linear costs are still
+small there, and the bear is instead loci-bound (addressed by optimization #1).
 
 ## Mixing (effective sample size)
 
