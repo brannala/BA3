@@ -177,6 +177,28 @@ opt-in until it has more field mileage. (The `z`-sweep is already thinned to eve
   and the posterior-equivalence gates before the frequency MCMC is deleted.
 - **Rollback:** until Phase 5, `--collapse off` is the untouched current sampler.
 
+## Measured performance
+
+Wall-clock, standard vs `--collapse`, matched seed and iteration count:
+
+| Dataset | Indiv | Loci (X) | Iters | Standard | Collapse | Speedup |
+|---|---|---|---|---|---|---|
+| Simulated sex-biased | 300 | 100 (40) | 400k | 40 s | 9 s | ~4.3x |
+| Simulated sex-biased, 15% missing | 300 | 100 (40) | 500k | 58 s | 10 s | ~5.7x |
+| Brown bear (de Jong 2023) | 36 | 5102 (2582) | 200k | 51 s | 41 s | ~1.3x |
+
+**The speedup scales with the individuals-to-loci ratio, not with size.** The
+collapsed sampler's win comes from removing the allele-frequency parameters (and
+their MCMC and the ancestry/frequency coupling), which dominates when individuals
+outnumber loci. When loci greatly outnumber individuals (the bear set: 36 indiv,
+5102 loci), per-iteration cost is instead dominated by O(loci) passes that *both*
+samplers pay: the collapsed ancestry move makes ~4 loci-passes (remove + evaluate
+current + evaluate proposed + re-add) to the standard move's ~1, and the age-2
+male-X `sigma` Gibbs sweeps all X loci in both modes. Meanwhile the standard
+frequency MCMC it eliminates is already cheap here (one locus per iteration, at
+O(indiv) cost). So collapse still wins, but only modestly (~1.3x) in the
+loci >> indiv regime, versus ~4-6x when indiv >= loci.
+
 ## Open decisions to confirm before coding
 
 1. `alpha` value (default 1.0 uniform; or a smaller symmetric value).
