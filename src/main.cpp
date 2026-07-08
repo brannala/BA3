@@ -163,9 +163,14 @@ const double PHI_PRIOR_A = 1.0;
 const double PHI_PRIOR_B = 1.0;
 
 // Migrant breeding-success multiplier gamma (tau = 2*gamma = age-2:age-1 rate
-// ratio). Weakly-informative log-normal prior centered at gamma = 1 (no change
-// in migrant breeding success); GAMMA_PROP_SD scales the log-scale random walk.
-const double GAMMA_PRIOR_LOGSD = 1.0;
+// ratio), bounded to (0,1] with gamma=1 the stationary-neutral maximum (migrants
+// breed like residents). Prior: half-log-normal on log(gamma)<=0, mode at gamma=1;
+// GAMMA_PRIOR_LOGSD concentrates it toward 1 (smaller = tighter). 0.5 keeps ~95%
+// of prior mass at gamma > ~0.37, encoding "migrants usually breed near-normally"
+// while still allowing genuine reductions. For near-identical populations gamma is
+// weakly identified and the likelihood can still pull it low despite the prior;
+// use --fixgamma there. GAMMA_PROP_SD scales the log-scale random walk.
+const double GAMMA_PRIOR_LOGSD = 0.5;
 const double GAMMA_PROP_SD = 0.15;
 
 // Collapsed sampler: symmetric Dirichlet concentration on population allele
