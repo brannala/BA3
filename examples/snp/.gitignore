@@ -1,0 +1,4 @@
+# Raw download archives are intermediates; the extracted *.vcf files are committed
+# so users can run the examples directly. fetch_snp_examples.sh can re-download.
+*.zip
+*.tar.gz
