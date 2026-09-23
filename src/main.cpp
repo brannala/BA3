@@ -1819,10 +1819,20 @@ if(!NOALLELEMCMC && !gArgs.collapse)
 
 	propAlleleFreq[chosenAllele] = 	std::fabs(alleleFreqs[chosenPopln][chosenLocus][chosenAllele]+(gsl_rng_uniform(r)-0.5)*gArgs.deltaA);
 
-	// added July 20, 2011 (further modified Nov 7, 2011)
+	// Reflect at 1 (the |.| above reflects at 0) so the proposal on p_j is symmetric.
 	if (propAlleleFreq[chosenAllele] > 1.0) {
-		propAlleleFreq[chosenAllele] = std::fabs(1.0 - propAlleleFreq[chosenAllele]);
+		propAlleleFreq[chosenAllele] = 2.0 - propAlleleFreq[chosenAllele];
 	}
+	// The other alleles are rescaled by c = (1-p_j')/(1-p_j), keeping their relative
+	// proportions fixed. In (p_j, proportions) coordinates the move is symmetric, and
+	// the Jacobian back to the simplex is (1-p_j)^(K-2), giving the log Hastings term
+	// (K-2)*log(c) in the acceptance ratio.
+	double logJacobian = 0.0;
+	bool degenerate = !(propAlleleFreq[chosenAllele] > 0.0 && propAlleleFreq[chosenAllele] < 1.0)
+	                  || !(alleleFreqs[chosenPopln][chosenLocus][chosenAllele] < 1.0);
+	if (!degenerate)
+		logJacobian = (noAlleles[chosenLocus] - 2.0) *
+		              (log(1.0 - propAlleleFreq[chosenAllele]) - log(1.0 - alleleFreqs[chosenPopln][chosenLocus][chosenAllele]));
 
 	for (unsigned int l=0; l<noAlleles[chosenLocus]; l++)
 		if(l!=chosenAllele)
@@ -1864,17 +1874,22 @@ if(!NOALLELEMCMC && !gArgs.collapse)
 		}
 	}
 
-	// Acceptance-rejection step
-	// Note: No Jacobian correction needed here because the rescaling proposal is symmetric
-	// (the forward and reverse transformations are exact inverses)
+	// Acceptance-rejection step (Jacobian term from the rescaling of the other alleles)
 	alpha = gsl_rng_uniform(r);
 	if (!NOLIKELIHOOD)
 	{
-		logPrMHR = dtLogL;
+		logPrMHR = dtLogL + logJacobian;
 	}
 	else
 	{
-		logPrMHR = 0.0;
+		logPrMHR = logJacobian;
+	}
+	for (unsigned int l=0; l<noAlleles[chosenLocus]; l++)
+		if (!(propAlleleFreq[l] > 0.0 && propAlleleFreq[l] < 1.0)) degenerate = true;
+	if (degenerate || !std::isfinite(logPrMHR))
+	{
+		logPrMHR = -INFINITY;   // reject proposals that leave the open simplex
+		alpha = 1.0;            // (gsl_rng_uniform can return 0; make rejection certain)
 	}
 
 	if(alpha <= exp(logPrMHR))
