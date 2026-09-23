@@ -270,6 +270,7 @@ effects.
 | -v --verbose      | None                    | Use verbose screen output                   |
 | -T --autotune     | None                    | Auto-tune mixing parameters (default: on)   |
 | -N --noautotune   | None                    | Disable auto-tuning of mixing parameters    |
+| -c --collapse     | None                    | Collapsed sampler (integrate out allele freqs) |
 | -V --vcf          | String                  | VCF input file (requires -M)                |
 | -M --meta         | String                  | Metadata file for VCF input                 |
 | -F --freqfile     | String                  | Output allele frequencies to separate file  |
@@ -354,6 +355,25 @@ For VCF file input, use the following options together:
 Example:
 ```
 ./BA3 -V snps.vcf -M populations.txt -o results.txt -i1000000
+```
+
+### 4.6 Collapsed sampler (-c)
+
+The -c (--collapse) option runs a collapsed MCMC sampler in which the population allele
+frequencies are integrated out analytically (a Dirichlet-multinomial marginal likelihood)
+instead of being sampled. It targets the same posterior distribution as the default sampler
+(same model and priors) but is usually much faster per iteration and mixes better, especially
+for data sets with many individuals. Missing genotypes are marginalized exactly rather than
+imputed. Inbreeding coefficients are updated by a Gibbs step on latent identity-by-descent
+indicators, so the -a and -f mixing parameters (and the allele frequency, inbreeding and
+missing genotype acceptance rates) are not used. Allele frequency output (-F and the main output
+file) is computed from draws of the frequencies given the sampled gene counts, so it has the
+same meaning as with the default sampler. With -t, the LogProb column of the trace file uses
+the collapsed (frequency-integrated) genotype likelihood, so it is not directly comparable
+with a trace from the default sampler.
+```
+./BA3 -c myin.txt
+./BA3 -c -V myin.vcf -M mymeta.txt
 ```
 
 ## 5 Output file format
