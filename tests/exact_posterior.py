@@ -26,7 +26,14 @@ Everything except ancestry is integrated out exactly:
     exact (up to rounding).
 The (2P-1)^N ancestry assignments are enumerated, so keep N small (~8 for P=2).
 
-usage: tests/exact_posterior.py data.txt [--json out.json]
+The log evidence log p(G) is also reported, on two scales: with unordered
+genotype probabilities (as above), and as BA3 computes it (ordered gene copies:
+lower by H*log 2, H = number of observed heterozygous genotypes). Options:
+  --pool A,B   treat populations A and B as one (B relabelled as A)
+  --tie A,B    A and B remain separate populations but share allele
+               frequencies (the nested H0 of the Savage-Dickey pooling test)
+
+usage: tests/exact_posterior.py data.txt [--json out.json] [--pool A,B] [--tie A,B]
 Output keys (populations by name, as in tests/check_exact.py): m[recv][src],
 F[pop], freq pop/locus/allele, anc individual[srcpop,age].
 """
@@ -58,6 +65,10 @@ def read_ba3(fn):
     return ind_order, pop_of, pop_order, loci, alleles, geno
 
 
+def G_raw(geno, i, l):
+    return geno[(i, l)]
+
+
 def ba3_pop_index(pop_order):
     # internal numbering only; results are reported by population name
     return {p: k for k, p in enumerate(pop_order)}
@@ -68,9 +79,15 @@ def main():
     ap.add_argument("data")
     ap.add_argument("--json", default="")
     ap.add_argument("--nodes", type=int, default=0, help="Gauss-Legendre nodes per F (default: exact)")
+    ap.add_argument("--pool", default="", help="A,B: merge population B into A")
+    ap.add_argument("--tie", default="", help="A,B: A and B share allele frequencies")
     a = ap.parse_args()
 
     inds, pop_of, pops, loci, allele_sets, geno = read_ba3(a.data)
+    if a.pool:
+        pa, pb = a.pool.split(",")
+        pop_of = {i: (pa if p == pb else p) for i, p in pop_of.items()}
+        pops = [p for p in pops if p != pb]
     P, N = len(pops), len(inds)
     pidx = ba3_pop_index(pops)
     pname = {v: k for k, v in pidx.items()}
@@ -78,6 +95,12 @@ def main():
     K = {l: len(allele_list[l]) for l in loci}
     aidx = {l: {x: k for k, x in enumerate(allele_list[l])} for l in loci}
     samp = [pidx[pop_of[i]] for i in inds]
+    fg = list(range(P))                                     # frequency group of each population
+    if a.tie:
+        ta, tb = a.tie.split(",")
+        fg[pidx[tb]] = pidx[ta]
+    H = sum(1 for n in range(N) for li in range(len(loci))
+            if G_raw(geno, inds[n], loci[li]) is not None and G_raw(geno, inds[n], loci[li])[0] != G_raw(geno, inds[n], loci[li])[1])
     G = {(n, li): (None if geno[(i, l)] is None else (aidx[l][geno[(i, l)][0]], aidx[l][geno[(i, l)][1]]))
          for n, i in enumerate(inds) for li, l in enumerate(loci)}
 
@@ -167,7 +190,7 @@ def main():
                 lc = 0.0
                 for copies, ibdp, isibd, trp, c0 in combo:
                     for q, al in copies:
-                        cnt[q][al] += 1
+                        cnt[fg[q]][al] += 1
                     if trp >= 0:
                         tr[trp] += 1
                         kF[trp] += isibd
@@ -230,6 +253,7 @@ def main():
                             np.dot(gw, loc_M[li][q, al, mom] * others)) / like
 
     Z = acc["Z"]
+    logZ = offset + math.log(Z)
     out = {}
     for s in range(P):
         for j in range(P):
@@ -250,7 +274,9 @@ def main():
         for st in St[n]:
             out[f"anc {i}[{pname[st[0]]},{st[1]}]"] = (acc[("anc", n, st)] / Z, None)
     if a.json:
-        json.dump({"post": out}, open(a.json, "w"), indent=1)
+        json.dump({"post": out, "logZ": logZ, "logZ_ba3": logZ - H * math.log(2.0), "H": H},
+                  open(a.json, "w"), indent=1)
+    print(f"log evidence: {logZ:.6f} (unordered genotypes); {logZ - H * math.log(2.0):.6f} (BA3 scale, H={H})")
     for k in sorted(out):
         if not k.startswith("anc") and not k.startswith("freq"):
             print(f"{k:10s} mean {out[k][0]:.5f}  SD {out[k][1]:.5f}")

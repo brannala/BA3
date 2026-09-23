@@ -46,6 +46,8 @@ struct globalArgs {
 	int autotune;
 	int collapse;            // integrate out allele frequencies (collapsed sampler); default off
 	int collapseM;           // also integrate out migration rates (implies collapse); default off
+	int ss;                  // stepping-stone marginal likelihood (implies collapseM); default off
+	int sdpool;              // Savage-Dickey test of equal allele frequencies per population pair
 	int useVCF;              // Use VCF input format
 	char vcfFileName[256];   // VCF file path
 	char metaFileName[256];  // Metadata file path (INDIV POPLN)
@@ -53,7 +55,7 @@ struct globalArgs {
 	char freqFileName[256];  // Allele frequencies file path
 } gArgs;
 
-static const char *optString = "s:i:n:b:o:m:a:f:V:M:F:cCvugtdphTN?";
+static const char *optString = "s:i:n:b:o:m:a:f:V:M:F:cCSPvugtdphTN?";
 
 static const struct option longOpts[] = {
 	{ "seed", required_argument, NULL, 's' },
@@ -78,6 +80,8 @@ static const struct option longOpts[] = {
 	{ "noautotune", no_argument, NULL, 'N'},
 	{ "collapse", no_argument, NULL, 'c'},
 	{ "collapse-m", no_argument, NULL, 'C'},
+	{ "ss", no_argument, NULL, 'S'},
+	{ "sdpool", no_argument, NULL, 'P'},
 	{ NULL, no_argument, NULL, 0 }
 };
 
@@ -605,6 +609,66 @@ static inline double logGenoPredT(long ***cnt, long **cntN, unsigned int p, unsi
 	              + gLogTab[cnt[p][l][a1] + 1] - gLogTab[N + 1 + A];
 }
 
+// Power on the genotype likelihood for the stepping-stone estimator (--ss); 1
+// otherwise. The parameters are ancestry, IBD indicators (prior F^z (1-F)^(1-z))
+// and age-2 phase codes (prior 1/2); their priors stay at power 1 and only the
+// Dirichlet-multinomial likelihood of the resulting gene counts is powered, so
+// every latent draw and the ancestry weights use the powered likelihood.
+static double ssBeta = 1.0;
+static inline double powB(double x) { return ssBeta == 1.0 ? x : pow(x, ssBeta); }
+static inline double lse2(double a, double b)
+{ double m = a > b ? a : b; return (m == -INFINITY) ? m : m + log(exp(a - m) + exp(b - m)); }
+
+// computeAddLogProb for ssBeta != 1 (slow path): latent IBD indicator / phase
+// summed with the powered likelihood.
+static double computeAddLogProbBeta(long ***cnt, long **cntN, const indiv& ind,
+                                    unsigned int noLoci, unsigned int *noAlleles, double *FStat)
+{
+	const GenotypeType (*g)[2] = ind.genotype;
+	const double b = ssBeta;
+	double dl = 0.0;
+	if (ind.migrantAge != 2)
+	{
+		unsigned int p = copyPop(ind);
+		double F = FStat[p];
+		double logF = (F > 0.0) ? log(F) : -INFINITY, log1mF = (F < 1.0) ? log(1.0 - F) : -INFINITY;
+		for (unsigned int l = 0; l < noLoci; l++)
+		{
+			unsigned int A = noAlleles[l]; if (A == 0) continue;
+			int a0 = g[l][0], a1 = g[l][1];
+			if (a0 < 0) continue;
+			long N = cntN[p][l];
+			double logr  = gLogTab[cnt[p][l][a0] + 1] - gLogTab[N + A];
+			if (a0 == a1)
+			{
+				double logr2 = gLogTab[cnt[p][l][a0] + 2] - gLogTab[N + 1 + A];
+				dl += lse2(logF + b * logr, log1mF + b * (logr + logr2));
+			}
+			else
+				dl += b * (log1mF + logr + gLogTab[cnt[p][l][a1] + 1] - gLogTab[N + 1 + A]);   // (1-F) is likelihood
+		}
+	}
+	else
+	{
+		unsigned int mig = ind.migrantPopln, nat = ind.samplePopln;
+		for (unsigned int l = 0; l < noLoci; l++)
+		{
+			unsigned int A = noAlleles[l]; if (A == 0) continue;
+			int a0 = g[l][0], a1 = g[l][1];
+			if (a0 < 0) continue;
+			double m0 = logAddRatioT(cnt, cntN, mig, l, a0, A), n1 = logAddRatioT(cnt, cntN, nat, l, a1, A);
+			if (a0 == a1)
+				dl += b * (m0 + n1);
+			else
+			{
+				double m1 = logAddRatioT(cnt, cntN, mig, l, a1, A), n0 = logAddRatioT(cnt, cntN, nat, l, a0, A);
+				dl += log(0.5) + lse2(b * (m0 + n1), b * (m1 + n0));
+			}
+		}
+	}
+	return dl;
+}
+
 // Change in the collapsed log-marginal from ADDING individual ind's gene copies
 // under its ancestry, given the current (without-ind) counts. Read-only. Age 0/1
 // marginalizes the IBD indicator (inbreeding F); age 2 marginalizes the latent
@@ -613,6 +677,7 @@ static double computeAddLogProb(long ***cnt, long **cntN, const indiv& ind,
                                 unsigned int noLoci, unsigned int *noAlleles, double alpha,
                                 double *FStat)
 {
+	if (ssBeta != 1.0) return computeAddLogProbBeta(cnt, cntN, ind, noLoci, noAlleles, FStat);
 	const GenotypeType (*g)[2] = ind.genotype;
 	double dl = 0.0;
 	if (ind.migrantAge != 2)
@@ -654,7 +719,7 @@ static double computeAddLogProb(long ***cnt, long **cntN, const indiv& ind,
 // 1 + gZTrials[p] - gZSum[p]): gZTrials[p] = observed genotypes of age-0/1
 // individuals whose copies come from population p, gZSum[p] = how many of those
 // are currently IBD. Maintained by addIndividual/removeIndividual/resampleIBD.
-static std::vector<long> gZSum, gZTrials;
+static std::vector<long> gZSum, gZTrials, gZHet;   // gZHet[p]: heterozygous genotypes among the trials
 
 // Permanently ADD individual ind's gene copies, sampling the latent per-locus
 // codes (stored in assign[]) so removeIndividual can undo it exactly.
@@ -674,11 +739,12 @@ static void addIndividual(long ***cnt, long **cntN, const indiv& ind, unsigned c
 			int a0 = g[l][0], a1 = g[l][1];
 			if (a0 < 0) continue;                              // missing genotype
 			gZTrials[p]++;
+			if (a0 != a1) gZHet[p]++;
 			if (a0 == a1)   // homozygote: sample the IBD indicator
 			{
 				double rr  = addRatio(cnt, cntN, p, l, a0, A, alpha);
 				double rr2 = (cnt[p][l][a0] + 1 + alpha) / (cntN[p][l] + 1 + A * alpha);
-				double pz1 = F * rr, pz0 = (1.0 - F) * rr * rr2;
+				double pz1 = F * powB(rr), pz0 = (1.0 - F) * powB(rr * rr2);
 				if (gsl_rng_uniform(r) < pz1 / (pz1 + pz0))
 				{ addCopy(cnt, cntN, p, l, a0); assign[l] = 1; gZSum[p]++; }      // IBD: one copy
 				else
@@ -709,7 +775,7 @@ static void addIndividual(long ***cnt, long **cntN, const indiv& ind, unsigned c
 			{
 				double w0 = addRatio(cnt, cntN, mig, l, a0, A, alpha) * addRatio(cnt, cntN, nat, l, a1, A, alpha);
 				double w1 = addRatio(cnt, cntN, mig, l, a1, A, alpha) * addRatio(cnt, cntN, nat, l, a0, A, alpha);
-				if (gsl_rng_uniform(r) < w0 / (w0 + w1))
+				if (gsl_rng_uniform(r) < powB(w0) / (powB(w0) + powB(w1)))
 				{ addCopy(cnt, cntN, mig, l, a0); addCopy(cnt, cntN, nat, l, a1); assign[l] = 1; }
 				else
 				{ addCopy(cnt, cntN, mig, l, a1); addCopy(cnt, cntN, nat, l, a0); assign[l] = 2; }
@@ -732,6 +798,7 @@ static void removeIndividual(long ***cnt, long **cntN, const indiv& ind,
 			int a0 = g[l][0], a1 = g[l][1];
 			if (a0 < 0) continue;
 			gZTrials[p]--;
+			if (a0 != a1) gZHet[p]--;
 			if (a0 == a1)                    // homozygote: 1 copy if IBD, else 2
 			{
 				removeCopy(cnt, cntN, p, l, a0);
@@ -781,7 +848,7 @@ static void resampleIBD(long ***cnt, long **cntN, const indiv& ind, unsigned cha
 		else gZSum[p]--;
 		double rr  = (cnt[p][l][a0] + alpha) / (cntN[p][l] + A * alpha);
 		double rr2 = (cnt[p][l][a0] + 1 + alpha) / (cntN[p][l] + 1 + A * alpha);
-		double pz1 = F * rr, pz0 = (1.0 - F) * rr * rr2;
+		double pz1 = F * powB(rr), pz0 = (1.0 - F) * powB(rr * rr2);
 		if (gsl_rng_uniform(r) < pz1 / (pz1 + pz0))
 		{ addCopy(cnt, cntN, p, l, a0); assign[l] = 1; gZSum[p]++; }
 		else
@@ -794,7 +861,12 @@ static void resampleIBD(long ***cnt, long **cntN, const indiv& ind, unsigned cha
 static void drawF(unsigned int noPopln, double *FStat)
 {
 	for (unsigned int p = 0; p < noPopln; p++)
-		FStat[p] = gsl_ran_beta(r, 1.0 + (double) gZSum[p], 1.0 + (double)(gZTrials[p] - gZSum[p]));
+		// Heterozygotes enter through their (1-F) likelihood factor, powered by ssBeta
+		// (so that at beta = 0 the chain samples the prior); homozygotes through their
+		// IBD indicators (prior terms, power 1). At beta = 1 this is the usual
+		// Beta(1 + #IBD, 1 + #genotypes - #IBD).
+		FStat[p] = gsl_ran_beta(r, 1.0 + (double) gZSum[p],
+		                        1.0 + (double)(gZTrials[p] - gZHet[p] - gZSum[p]) + ssBeta * (double) gZHet[p]);
 }
 
 // Moment estimate F = 1 - Hobs/Hexp per sampled population, used only to start
@@ -827,6 +899,69 @@ static void momentF(indiv *ind, unsigned int noIndiv, unsigned int noLoci, unsig
 		if (obs > 0 && nl > 0 && hexp > 0) F = 1.0 - (het / obs) / (hexp / nl);
 		FStat[p] = F < 0.0 ? 0.0 : (F > 0.99 ? 0.99 : F);
 	}
+}
+
+// --- Stepping-stone marginal likelihood (--ss) ---
+// Power the genotype likelihood by beta_k = (k/K)^(1/SS_ALPHA), k = 0..K (Xie et
+// al. 2011), K = SS_RUNGS. The run is split into K rungs of equal length, each
+// at power beta_k with its first SS_RUNG_BURN fraction discarded; rung k
+// estimates log E_{beta_k}[L^(beta_{k+1} - beta_k)] by an online log-mean-exp
+// of the sampled log-likelihoods, and log p(G) is the sum over rungs.
+const int SS_RUNGS = 16;
+const double SS_ALPHA = 0.3;
+const double SS_RUNG_BURN = 0.4;
+static double ssBetaSched[SS_RUNGS + 1];
+static double ssMax[SS_RUNGS], ssSum[SS_RUNGS];
+static long ssN[SS_RUNGS];
+static void ssInit()
+{
+	for (int k = 0; k <= SS_RUNGS; k++) ssBetaSched[k] = pow((double) k / SS_RUNGS, 1.0 / SS_ALPHA);
+	for (int k = 0; k < SS_RUNGS; k++) { ssMax[k] = -INFINITY; ssSum[k] = 0.0; ssN[k] = 0; }
+}
+static void ssAccum(int k, double logL)
+{
+	double x = (ssBetaSched[k + 1] - ssBetaSched[k]) * logL;
+	if (x > ssMax[k]) { ssSum[k] = ssSum[k] * exp(ssMax[k] - x) + 1.0; ssMax[k] = x; }
+	else ssSum[k] += exp(x - ssMax[k]);
+	ssN[k]++;
+}
+static double ssEvidence()
+{
+	double lz = 0.0;
+	for (int k = 0; k < SS_RUNGS; k++) lz += ssMax[k] + log(ssSum[k] / ssN[k]);
+	return lz;
+}
+
+// --- Savage-Dickey test of equal allele frequencies (--sdpool) ---
+// H0: p_A = p_B at every locus, nested in the full model (prior of the shared
+// frequencies = Dirichlet(1), matching the conditional prior under H1). Given
+// the gene counts the frequencies are independent Dirichlet(counts + 1), so the
+// density of p_A - p_B at 0 is prod_l B(a_A + a_B - 1) / (B(a_A) B(a_B)) with B
+// the multivariate Beta; under the prior it is prod_l (K_l - 1)!. BF01 is the
+// posterior mean of the ratio (Rao-Blackwellized), accumulated as an online
+// log-mean-exp; the SD of the log term is reported as a reliability diagnostic
+// (the estimate is unstable when it is large, e.g. >> 1 with many loci).
+static double lmBeta(const std::vector<double>& a)
+{
+	double s = 0.0, t = 0.0;
+	for (double x : a) { s += lgamma(x); t += x; }
+	return s - lgamma(t);
+}
+static double sdPoolLogRatio(long ***cnt, unsigned int A, unsigned int B, unsigned int noLoci, unsigned int *noAlleles)
+{
+	double lr = 0.0;
+	std::vector<double> aA, aB, aAB;
+	for (unsigned int l = 0; l < noLoci; l++)
+	{
+		unsigned int K = noAlleles[l]; if (K == 0) continue;
+		aA.resize(K); aB.resize(K); aAB.resize(K);
+		for (unsigned int k = 0; k < K; k++)
+		{
+			aA[k] = cnt[A][l][k] + 1.0; aB[k] = cnt[B][l][k] + 1.0; aAB[k] = aA[k] + aB[k] - 1.0;
+		}
+		lr += lmBeta(aAB) - lmBeta(aA) - lmBeta(aB) - lgamma((double) K);   // minus log (K-1)!
+	}
+	return lr;
 }
 
 // Migration rates integrated out (--collapse-m). With u = 3m, BA3's uniform prior
@@ -911,6 +1046,8 @@ int main( int argc, char *argv[] )
 	gArgs.autotune = 1;  // autotune enabled by default
 	gArgs.collapse = 0;  // collapsed (integrated-frequency) sampler off by default
 	gArgs.collapseM = 0; // migration rates integrated out as well (off by default)
+	gArgs.ss = 0;        // stepping-stone marginal likelihood (off by default)
+	gArgs.sdpool = 0;    // Savage-Dickey pooling test (off by default)
 	gArgs.usingOutfile = 1;
 	gArgs.useVCF = 0;
 	gArgs.vcfFileName[0] = '\0';
@@ -997,6 +1134,18 @@ int main( int argc, char *argv[] )
 				gArgs.collapseM = 1;
 				break;
 
+			case 'S':
+				gArgs.collapse = 1;
+				gArgs.collapseM = 1;
+				gArgs.ss = 1;
+				break;
+
+			case 'P':
+				gArgs.collapse = 1;
+				gArgs.collapseM = 1;
+				gArgs.sdpool = 1;
+				break;
+
 			case 'V':
 				strncpy(gArgs.vcfFileName, optarg, sizeof(gArgs.vcfFileName) - 1);
 				gArgs.vcfFileName[sizeof(gArgs.vcfFileName) - 1] = '\0';
@@ -1031,6 +1180,9 @@ int main( int argc, char *argv[] )
 				std::cout << "    -N, --noautotune  disable auto-tuning of mixing parameters\n";
 				std::cout << "    -c, --collapse    integrate out allele frequencies (collapsed sampler; faster)\n";
 				std::cout << "    -C, --collapse-m  also integrate out migration rates (implies -c; experimental)\n";
+				std::cout << "    -S, --ss          stepping-stone log marginal likelihood (implies -C; experimental)\n";
+				std::cout << "    -P, --sdpool      Savage-Dickey test of equal allele frequencies per population\n";
+				std::cout << "                      pair (implies -C; experimental)\n";
 				exit(0);
 
 			case '?':
@@ -1362,6 +1514,17 @@ common_processing:
 		for (unsigned int i = 0; i < noIndiv; i++) ancCond[i][sampleIndiv[i].samplePopln * 3 + 0] = 1.0;
 	}
 
+	// --ss / --sdpool accumulators
+	if (gArgs.ss) ssInit();
+	std::vector<std::pair<unsigned int, unsigned int> > sdPairs;
+	std::vector<double> sdMax, sdSum, sdMean, sdM2;
+	long sdN = 0;
+	if (gArgs.sdpool)
+		for (unsigned int a = 0; a < noPopln; a++)
+			for (unsigned int b = a + 1; b < noPopln; b++) sdPairs.push_back(std::make_pair(a, b));
+	sdMax.assign(sdPairs.size(), -INFINITY); sdSum.assign(sdPairs.size(), 0.0);
+	sdMean.assign(sdPairs.size(), 0.0); sdM2.assign(sdPairs.size(), 0.0);
+
 	// --collapse-m: running means of E[m | counts] and E[m^2 | counts]
 	std::vector<std::vector<double> > rbM1(noPopln, std::vector<double>(noPopln, 0.0));
 	std::vector<std::vector<double> > rbM2(noPopln, std::vector<double>(noPopln, 0.0));
@@ -1505,11 +1668,15 @@ common_processing:
 		// [0, 2*noIndiv + maxAlleles + 1]; +3 slack on each dimension.
 		initHomLog(noPopln, 2L * (long)noIndiv + 3, 2L * (long)noIndiv + (long)maxAlleles + 3);
 		initCountsNative(gCount, gCountN, sampleIndiv, noIndiv, noLoci, noAlleles, noPopln);
-		gZSum.assign(noPopln, 0); gZTrials.assign(noPopln, 0);
+		gZSum.assign(noPopln, 0); gZTrials.assign(noPopln, 0); gZHet.assign(noPopln, 0);
 		for (unsigned int i = 0; i < noIndiv; i++)
 			for (unsigned int l = 0; l < noLoci; l++)
 				if (noAlleles[l] > 0 && sampleIndiv[i].genotype[l][0] >= 0)
+				{
 					gZTrials[sampleIndiv[i].samplePopln]++;
+					if (sampleIndiv[i].genotype[l][0] != sampleIndiv[i].genotype[l][1])
+						gZHet[sampleIndiv[i].samplePopln]++;
+				}
 		// Self-check (debug): removing then re-adding each individual must
 		// reproduce the full recomputed log-marginal.
 		if (gArgs.debug)
@@ -1635,6 +1802,16 @@ common_processing:
 		double dtLogL;
 
 
+
+// --ss: rung of this iteration and its power
+int ssRung = 0; unsigned long ssIterInRung = 0, ssRungLen = 1;
+if (gArgs.ss)
+{
+	ssRungLen = mciter / SS_RUNGS; if (ssRungLen < 1) ssRungLen = 1;
+	ssRung = (int)((i - 1) / ssRungLen); if (ssRung >= SS_RUNGS) ssRung = SS_RUNGS - 1;
+	ssIterInRung = (i - 1) - (unsigned long) ssRung * ssRungLen;
+	ssBeta = ssBetaSched[ssRung];
+}
 
 if(!NOANCMCMC && gArgs.collapseM)
 {
@@ -2174,6 +2351,30 @@ if(!NOMISSINGDATA && !gArgs.collapse)
 	}
 }
 
+// --ss: record the genotype log-likelihood of post-burn-in samples of this rung
+if (gArgs.ss && ssIterInRung >= (unsigned long)(SS_RUNG_BURN * ssRungLen) && (i % gArgs.sampling) == 0)
+{
+	// genotype log-likelihood: Dirichlet-multinomial of the gene counts plus the
+	// (1-F) factor of each age-0/1 heterozygote
+	double ll = collapsedLogLik(gCount, gCountN, noPopln, noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
+	for (unsigned int q = 0; q < noPopln; q++)
+		if (gZHet[q] > 0) ll += (double) gZHet[q] * log(1.0 - FStat[q]);
+	ssAccum(ssRung, ll);
+}
+
+// --sdpool: Rao-Blackwellized density ratio of p_A - p_B at 0, per pair
+if (gArgs.sdpool && !gArgs.ss && i > (unsigned int) gArgs.burnin && (i % gArgs.sampling) == 0)
+{
+	sdN++;
+	for (size_t q = 0; q < sdPairs.size(); q++)
+	{
+		double x = sdPoolLogRatio(gCount, sdPairs[q].first, sdPairs[q].second, noLoci, noAlleles);
+		if (x > sdMax[q]) { sdSum[q] = sdSum[q] * exp(sdMax[q] - x) + 1.0; sdMax[q] = x; }
+		else sdSum[q] += exp(x - sdMax[q]);
+		double d = x - sdMean[q]; sdMean[q] += d / sdN; sdM2[q] += d * (x - sdMean[q]);
+	}
+}
+
 // --collapse-m: migration rates are not part of the state; draw them from their
 // full-conditional given the ancestry counts wherever they are reported.
 if (gArgs.collapseM && (i % gArgs.sampling) == 0)
@@ -2569,6 +2770,32 @@ mcmcout << "\n Population Labels:\n";
 	// Output Savage-Dickey test results for zero migration hypotheses
 	computeSavageDickeyBayesFactors(sdStats, noPopln, PRIOR_DENSITY_AT_ZERO, mcmcout, poplnNames);
 
+	if (gArgs.ss)
+	{
+		double lz = ssEvidence();
+		mcmcout << "\n Stepping-stone log marginal likelihood = " << std::setprecision(4) << std::fixed << lz
+		        << "  (" << SS_RUNGS << " rungs; genotype likelihood of ordered gene copies)\n"
+		        << " Note: posterior summaries above mix all rungs and are not meaningful with --ss.\n";
+		std::cout << "\n  Stepping-stone log marginal likelihood = " << std::setprecision(4) << std::fixed << lz << "\n";
+	}
+	if (gArgs.sdpool && sdN > 0)
+	{
+		mcmcout << "\n Pooling test (Savage-Dickey; H0: equal allele frequencies at all loci):\n";
+		mcmcout << " Pair                                   log10(BF01)   SD(ln ratio)\n";
+		for (size_t q = 0; q < sdPairs.size(); q++)
+		{
+			double lbf = (sdMax[q] + log(sdSum[q] / sdN)) / log(10.0);
+			double sd = sdN > 1 ? sqrt(sdM2[q] / (sdN - 1)) : 0.0;
+			std::ostringstream pr;
+			pr << "[" << sdPairs[q].first << "] " << poplnNames[sdPairs[q].first] << " - ["
+			   << sdPairs[q].second << "] " << poplnNames[sdPairs[q].second];
+			mcmcout << " " << std::left << std::setw(38) << pr.str() << std::right << std::setw(12)
+			        << std::setprecision(3) << std::fixed << lbf << std::setw(14) << sd << "\n";
+		}
+		mcmcout << " BF01 > 1 supports equal allele frequencies. The estimate is unreliable when\n"
+		        << " SD(ln ratio) is large (more than a few units); use --ss to compare pooled models.\n";
+	}
+
 	mcmcout << "\n Inbreeding Coefficients:\n";
 	mcmcout << " Index  Population                     F(SD)\n";
 	mcmcout << " -----  ----------                     -----\n";
@@ -2726,7 +2953,7 @@ mcmcout << "\n Population Labels:\n";
 	if (gArgs.collapse && gArgs.debug)
 	{
 		// Recount IBD / genotype totals from the latent codes and compare.
-		std::vector<long> zs(noPopln, 0), zt(noPopln, 0);
+		std::vector<long> zs(noPopln, 0), zt(noPopln, 0), zh(noPopln, 0);
 		for (unsigned int i = 0; i < noIndiv; i++)
 		{
 			if (sampleIndiv[i].migrantAge == 2) continue;
@@ -2736,10 +2963,11 @@ mcmcout << "\n Population Labels:\n";
 				int a0 = sampleIndiv[i].genotype[l][0], a1 = sampleIndiv[i].genotype[l][1];
 				if (noAlleles[l] == 0 || a0 < 0) continue;
 				zt[p]++;
+				if (a0 != a1) zh[p]++;
 				if (a0 == a1 && gAssign[i][l] == 1) zs[p]++;
 			}
 		}
-		bool ok = (zs == gZSum) && (zt == gZTrials);
+		bool ok = (zs == gZSum) && (zt == gZTrials) && (zh == gZHet);
 		std::cout << "collapsed IBD totals recount: " << (ok ? "PASS" : "FAIL") << "\n";
 	}
 

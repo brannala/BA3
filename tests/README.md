@@ -19,10 +19,11 @@ tests/bench.py /tmp/ba3-ref/BA3 ./BA3                         # run on an idle m
 | `regress_default.sh` | Without `-c`, the new binary is **byte-identical** to the reference for the same seed: all output files (main output, trace, `BA3indiv.txt`, `-F` frequencies) and stdout, on native and VCF inputs, with and without missing data. |
 | `check_exact.py` | Every build given is run with R seeds on the tiny data sets `data/exact_*.txt`, and each posterior mean and SD (migration rates, F, allele frequencies, individual ancestry probabilities) is compared with the **exact posterior** from `exact_posterior.py`. A group fails if any \|z\| > 4 or more than 2% exceed 3. |
 | `exact_posterior.py` | Exact BA3 posterior by enumeration of all (2P-1)^N ancestry assignments, with migration rates (Dirichlet), allele frequencies (Dirichlet-multinomial, IBD indicators and age-2 phase summed) and F (Gauss-Legendre quadrature, exact for these polynomial integrands) integrated out. Keep N small (8 individuals, 2 populations: 6561 assignments, ~4 s). |
+| `check_evidence.py` | Model-comparison estimators against exact values: the stepping-stone log marginal likelihood (`-S`) on every exact data set and on `exact_3pop` with two populations pooled, the pooled-vs-full log Bayes factor, and the Savage-Dickey pooling test (`-P`, H0: equal allele frequencies of a population pair). Exact values come from `exact_posterior.py --pool` / `--tie`. |
 | `compare_collapse.py` | With `-c`, posterior means agree with a standard-sampler build on the example data sets (R seeds per mode, z-scores from between-seed standard errors). Between-seed SEs are optimistic for slowly mixing quantities, so use long chains. |
 | `bench.py` | Seconds per 100k iterations, speedup, effective sample size (ESS) of the migration-rate traces, and ESS per second for both samplers. `--snp DIR` adds the empirical SNP sets. |
 
-The exact data sets each target one feature: `exact_k2` (biallelic loci),
+The exact data sets each target one feature (`exact_3pop`, with three populations, is for the pooling tests): `exact_k2` (biallelic loci),
 `exact_k234` (loci with 2, 3 and 4 alleles), `exact_missing` (`exact_k234` with
 three missing genotypes) and `exact_highF` (all homozygous).
 
