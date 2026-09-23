@@ -1351,6 +1351,17 @@ common_processing:
 		for (unsigned int j = 0; j < noPopln; j++)
 			varMigrationRates[i][j]=0.0;
 
+	// --collapse-m: latest ancestry full-conditional of each individual, indexed
+	// [pop*3 + age]; initialised to the indicator of the (all-native) start state.
+	// Averaged at sampling times in place of state indicators (Rao-Blackwellized
+	// ancestry probabilities).
+	std::vector<std::vector<double> > ancCond;
+	if (gArgs.collapseM)
+	{
+		ancCond.assign(noIndiv, std::vector<double>(3 * noPopln, 0.0));
+		for (unsigned int i = 0; i < noIndiv; i++) ancCond[i][sampleIndiv[i].samplePopln * 3 + 0] = 1.0;
+	}
+
 	// --collapse-m: running means of E[m | counts] and E[m^2 | counts]
 	std::vector<std::vector<double> > rbM1(noPopln, std::vector<double>(noPopln, 0.0));
 	std::vector<std::vector<double> > rbM2(noPopln, std::vector<double>(noPopln, 0.0));
@@ -1667,6 +1678,8 @@ if(!NOANCMCMC && gArgs.collapseM)
 	}
 	double tot = 0.0;
 	for (k = 0; k < nStates; k++) { lp[k] = exp(lp[k] - lmax); tot += lp[k]; }
+	std::fill(ancCond[ci].begin(), ancCond[ci].end(), 0.0);
+	for (k = 0; k < nStates; k++) ancCond[ci][stPop[k] * 3 + stAge[k]] = lp[k] / tot;
 	double u = gsl_rng_uniform(r) * tot, cum = 0.0;
 	unsigned int pick = nStates - 1;
 	for (k = 0; k < nStates; k++) { cum += lp[k]; if (u < cum) { pick = k; break; } }
@@ -2402,6 +2415,12 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 				avgFStat[l] = avgFStat[l]+(FStat[l]-avgFStat[l])/(1.0+iter);
 			}
 
+			if (gArgs.collapseM)
+				for (unsigned int l=0; l < noIndiv; l++)
+					for (unsigned int k=0; k<noPopln; k++)
+						for (unsigned int b=0; b<3; b++)
+							ancP[l][k][b] += (ancCond[l][k * 3 + b] - ancP[l][k][b]) / (iter + 1.0);
+			else
 			for (unsigned int l=0; l < noIndiv; l++)
 			{
 				if (sampleIndiv[l].migrantAge == 0)
