@@ -45,6 +45,7 @@ struct globalArgs {
 	int nolikelihood;
 	int autotune;
 	int collapse;            // integrate out allele frequencies (collapsed sampler); default off
+	int collapseM;           // also integrate out migration rates (implies collapse); default off
 	int useVCF;              // Use VCF input format
 	char vcfFileName[256];   // VCF file path
 	char metaFileName[256];  // Metadata file path (INDIV POPLN)
@@ -52,7 +53,7 @@ struct globalArgs {
 	char freqFileName[256];  // Allele frequencies file path
 } gArgs;
 
-static const char *optString = "s:i:n:b:o:m:a:f:V:M:F:cvugtdphTN?";
+static const char *optString = "s:i:n:b:o:m:a:f:V:M:F:cCvugtdphTN?";
 
 static const struct option longOpts[] = {
 	{ "seed", required_argument, NULL, 's' },
@@ -76,6 +77,7 @@ static const struct option longOpts[] = {
 	{ "autotune", no_argument, NULL, 'T'},
 	{ "noautotune", no_argument, NULL, 'N'},
 	{ "collapse", no_argument, NULL, 'c'},
+	{ "collapse-m", no_argument, NULL, 'C'},
 	{ NULL, no_argument, NULL, 0 }
 };
 
@@ -827,6 +829,53 @@ static void momentF(indiv *ind, unsigned int noIndiv, unsigned int noLoci, unsig
 	}
 }
 
+// Migration rates integrated out (--collapse-m). With u = 3m, BA3's uniform prior
+// on each row {m_sj >= 0, sum_j m_sj <= 1/3} is a flat Dirichlet over P categories
+// (age 0 = slack 1 - sum u, and one category per source j), so given the ancestry
+// counts of receiving population s -- n0 natives, c_j = age-1 + age-2 migrants from
+// j -- the row is Dirichlet(n0 + 1, c_j + 1, ...), with total N_s + P.
+// Rao-Blackwellized moments of m | counts, for every entry of row s (diagonal:
+// m_ss = 1 - S/3 with S = sum_j u_j ~ Beta(C + P - 1, n0 + 1)).
+static void migRowMoments(long int ***migrantCounts, unsigned int s, unsigned int noPopln,
+                          double *E1, double *E2)
+{
+	double n0 = (double) migrantCounts[s][s][0], C = 0.0;
+	for (unsigned int j = 0; j < noPopln; j++)
+		if (j != s) C += (double)(migrantCounts[s][j][1] + migrantCounts[s][j][2]);
+	double a0 = n0 + C + noPopln;                        // Dirichlet total = N_s + P
+	for (unsigned int j = 0; j < noPopln; j++)
+	{
+		if (j == s) continue;
+		double c = (double)(migrantCounts[s][j][1] + migrantCounts[s][j][2]);
+		E1[j] = (c + 1.0) / (3.0 * a0);
+		E2[j] = (c + 1.0) * (c + 2.0) / (9.0 * a0 * (a0 + 1.0));
+	}
+	double A = C + noPopln - 1.0;                        // S ~ Beta(A, n0 + 1)
+	double ES = A / a0, ES2 = A * (A + 1.0) / (a0 * (a0 + 1.0));
+	E1[s] = 1.0 - ES / 3.0;
+	E2[s] = 1.0 - 2.0 * ES / 3.0 + ES2 / 9.0;
+}
+
+// Draw a migration matrix from its Dirichlet full-conditional given the ancestry
+// counts (for the trace file and the Savage-Dickey statistics).
+static void drawMigrationRates(long int ***migrantCounts, double **migrationRates, unsigned int noPopln)
+{
+	std::vector<double> alpha(noPopln), u(noPopln);
+	for (unsigned int s = 0; s < noPopln; s++)
+	{
+		unsigned int k = 0;
+		alpha[k++] = (double) migrantCounts[s][s][0] + 1.0;
+		for (unsigned int j = 0; j < noPopln; j++)
+			if (j != s) alpha[k++] = (double)(migrantCounts[s][j][1] + migrantCounts[s][j][2]) + 1.0;
+		gsl_ran_dirichlet(r, noPopln, alpha.data(), u.data());
+		double sum = 0.0; k = 1;
+		for (unsigned int j = 0; j < noPopln; j++)
+			if (j != s) { migrationRates[s][j] = u[k++] / 3.0; sum += migrationRates[s][j]; }
+		migrationRates[s][s] = 1.0 - sum;
+		migrationRates[s][noPopln] = sum;
+	}
+}
+
 //=============================================================================
 
 int main( int argc, char *argv[] )
@@ -861,6 +910,7 @@ int main( int argc, char *argv[] )
 	gArgs.nolikelihood=0;
 	gArgs.autotune = 1;  // autotune enabled by default
 	gArgs.collapse = 0;  // collapsed (integrated-frequency) sampler off by default
+	gArgs.collapseM = 0; // migration rates integrated out as well (off by default)
 	gArgs.usingOutfile = 1;
 	gArgs.useVCF = 0;
 	gArgs.vcfFileName[0] = '\0';
@@ -942,6 +992,11 @@ int main( int argc, char *argv[] )
 				gArgs.collapse = 1;
 				break;
 
+			case 'C':
+				gArgs.collapse = 1;
+				gArgs.collapseM = 1;
+				break;
+
 			case 'V':
 				strncpy(gArgs.vcfFileName, optarg, sizeof(gArgs.vcfFileName) - 1);
 				gArgs.vcfFileName[sizeof(gArgs.vcfFileName) - 1] = '\0';
@@ -975,6 +1030,7 @@ int main( int argc, char *argv[] )
 				std::cout << "    -T, --autotune    auto-tune mixing parameters during burn-in (default)\n";
 				std::cout << "    -N, --noautotune  disable auto-tuning of mixing parameters\n";
 				std::cout << "    -c, --collapse    integrate out allele frequencies (collapsed sampler; faster)\n";
+				std::cout << "    -C, --collapse-m  also integrate out migration rates (implies -c; experimental)\n";
 				exit(0);
 
 			case '?':
@@ -1295,6 +1351,10 @@ common_processing:
 		for (unsigned int j = 0; j < noPopln; j++)
 			varMigrationRates[i][j]=0.0;
 
+	// --collapse-m: running means of E[m | counts] and E[m^2 | counts]
+	std::vector<std::vector<double> > rbM1(noPopln, std::vector<double>(noPopln, 0.0));
+	std::vector<std::vector<double> > rbM2(noPopln, std::vector<double>(noPopln, 0.0));
+
 	long int ***migrantCounts;
 	migrantCounts = new long int**[noPopln];
 	for(unsigned int i = 0; i < noPopln; i++)
@@ -1565,7 +1625,60 @@ common_processing:
 
 
 
-if(!NOANCMCMC)
+if(!NOANCMCMC && gArgs.collapseM)
+{
+	// Ancestry Gibbs update with migration rates integrated out (--collapse-m).
+	// Remove individual i from the gene-count tables and the ancestry counts; its
+	// ancestry prior is then a Polya urn over its 2P-1 states (weights n0 + 1 for
+	// age 0, (c_j + 1)/3 for age 1 from j, 2(c_j + 1)/3 for age 2 from j; common
+	// denominator N_s - 1 + P); multiply by the collapsed genotype predictive of
+	// each state, draw the new state exactly, and re-add.
+	unsigned int ci = gsl_rng_uniform_int(r, noIndiv);
+	indiv &ind = sampleIndiv[ci];
+	unsigned int s = ind.samplePopln;
+	unsigned int oldPop = ind.migrantPopln, oldAge = ind.migrantAge;
+	if (!NOLIKELIHOOD)
+		removeIndividual(gCount, gCountN, ind, gAssign[ci], noLoci);
+	migrantCounts[s][oldPop][oldAge]--;
+	unsigned int nStates = 2 * noPopln - 1;
+	std::vector<double> lp(nStates);
+	std::vector<unsigned int> stPop(nStates), stAge(nStates);
+	unsigned int k = 0;
+	stPop[k] = s; stAge[k] = 0; k++;
+	for (unsigned int j = 0; j < noPopln; j++)
+		if (j != s) { stPop[k] = j; stAge[k] = 1; k++; stPop[k] = j; stAge[k] = 2; k++; }
+	double lmax = -INFINITY;
+	for (k = 0; k < nStates; k++)
+	{
+		double prior;
+		if (stAge[k] == 0) prior = (double) migrantCounts[s][s][0] + 1.0;
+		else
+		{
+			double c = (double)(migrantCounts[s][stPop[k]][1] + migrantCounts[s][stPop[k]][2]);
+			prior = (stAge[k] == 1 ? 1.0 : 2.0) * (c + 1.0) / 3.0;
+		}
+		lp[k] = log(prior);
+		if (!NOLIKELIHOOD)
+		{
+			ind.migrantPopln = stPop[k]; ind.migrantAge = stAge[k];
+			lp[k] += computeAddLogProb(gCount, gCountN, ind, noLoci, noAlleles, ALLELE_PRIOR_ALPHA, FStat);
+		}
+		if (lp[k] > lmax) lmax = lp[k];
+	}
+	double tot = 0.0;
+	for (k = 0; k < nStates; k++) { lp[k] = exp(lp[k] - lmax); tot += lp[k]; }
+	double u = gsl_rng_uniform(r) * tot, cum = 0.0;
+	unsigned int pick = nStates - 1;
+	for (k = 0; k < nStates; k++) { cum += lp[k]; if (u < cum) { pick = k; break; } }
+	ind.migrantPopln = stPop[pick]; ind.migrantAge = stAge[pick];
+	migrantCounts[s][ind.migrantPopln][ind.migrantAge]++;
+	if (!NOLIKELIHOOD)
+		addIndividual(gCount, gCountN, ind, gAssign[ci], noLoci, noAlleles, ALLELE_PRIOR_ALPHA, FStat);
+	bool changed = (ind.migrantPopln != oldPop || ind.migrantAge != oldAge);
+	ancestryAcceptRate = (changed ? 1.0/i : 0.0) + ((i-1.0)/i)*ancestryAcceptRate;
+}
+
+if(!NOANCMCMC && !gArgs.collapseM)
 {
 
 		/* propose modified migrant ancestry for a random individual */
@@ -1733,7 +1846,7 @@ if(!NOANCMCMC)
 			              noLoci, noAlleles, ALLELE_PRIOR_ALPHA, FStat);
 }
 
-if(!NOMIGRATEMCMC)
+if(!NOMIGRATEMCMC && !gArgs.collapseM)
 {
 
 
@@ -2048,6 +2161,11 @@ if(!NOMISSINGDATA && !gArgs.collapse)
 	}
 }
 
+// --collapse-m: migration rates are not part of the state; draw them from their
+// full-conditional given the ancestry counts wherever they are reported.
+if (gArgs.collapseM && (i % gArgs.sampling) == 0)
+	drawMigrationRates(migrantCounts, migrationRates, noPopln);
+
 // Autotune: adjust delta values during burn-in to achieve target acceptance rate
 if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL) == 0 && i > 0)
 {
@@ -2231,6 +2349,21 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 			// Update Savage-Dickey statistics for migration rate hypothesis testing
 			updateSavageDickeyStats(sdStats, migrationRates, noPopln, SD_BANDWIDTH);
 
+			// --collapse-m: Rao-Blackwellized migration-rate moments given the counts
+			if (gArgs.collapseM)
+			{
+				std::vector<double> e1(noPopln), e2(noPopln);
+				for (unsigned int l = 0; l < noPopln; l++)
+				{
+					migRowMoments(migrantCounts, l, noPopln, e1.data(), e2.data());
+					for (unsigned int k = 0; k < noPopln; k++)
+					{
+						rbM1[l][k] += (e1[k] - rbM1[l][k]) / (1.0 + iter);
+						rbM2[l][k] += (e2[k] - rbM2[l][k]) / (1.0 + iter);
+					}
+				}
+			}
+
 			double dirAlpha[MAXALLELE];
 			double dirDraw[MAXALLELE];
 			for (unsigned int l = 0; l < noPopln; l++)
@@ -2373,6 +2506,16 @@ mcmcout << "\n Population Labels:\n";
 	{
 		mcmcout << "  [" << l << "] " << poplnNames[l] << "\n";
 	}
+
+	// --collapse-m: report the Rao-Blackwellized posterior mean and SD
+	if (gArgs.collapseM)
+		for (unsigned int l = 0; l < noPopln; l++)
+			for (unsigned int k = 0; k < noPopln; k++)
+			{
+				avgMigrationRates[l][k] = rbM1[l][k];
+				double v = rbM2[l][k] - rbM1[l][k] * rbM1[l][k];
+				varMigrationRates[l][k] = v > 0.0 ? v : 0.0;
+			}
 
 	mcmcout << "\n Migration Rate Matrix m[i][j] (fraction of pop i from pop j):\n";
 	mcmcout << " Mean(SD)\n";
