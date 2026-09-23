@@ -5,8 +5,8 @@ for the standard sampler. The Python scripts need numpy (`exact_posterior.py`,
 `check_exact.py`, `bench.py`).
 
 ```bash
-# a reference build (the standard sampler before this change)
-git worktree add /tmp/ba3-ref master && make -C /tmp/ba3-ref
+# a reference build, e.g. the last release
+git worktree add /tmp/ba3-ref v3.5.0 && make -C /tmp/ba3-ref
 
 tests/regress_default.sh /tmp/ba3-ref/BA3 ./BA3              # ~4 min
 tests/check_exact.py ref=/tmp/ba3-ref/BA3 collapse=./BA3:-c  # exact posterior; ~5 min on 8 cores
@@ -26,14 +26,17 @@ The exact data sets each target one feature: `exact_k2` (biallelic loci),
 `exact_k234` (loci with 2, 3 and 4 alleles), `exact_missing` (`exact_k234` with
 three missing genotypes) and `exact_highF` (all homozygous).
 
-**Known reference problems.** The standard sampler in BA3 up to 3.4.4 has two
-bugs that `check_exact.py` detects: the missing-genotype update over-weights
-imputed heterozygotes by a factor of 2, and the allele-frequency move lacks the
-Jacobian for loci with 3 or more alleles (and wraps rather than reflects at 1,
-which can also produce `nan` frequencies). With such a build as the reference,
-`check_exact.py` fails it on `exact_k234`, `exact_missing` and `exact_highF`,
-and `compare_collapse.py` reports disagreements on data with missing genotypes
-or multi-allele loci that come from the reference, not from `-c`.
+**Known reference problems.** The standard sampler in BA3 up to 3.4.4 had two
+bugs, fixed in 3.5.0, that `check_exact.py` detects: the missing-genotype update over-weighted
+imputed heterozygotes by a factor of 2, and the allele-frequency move lacked the
+Jacobian for loci with 3 or more alleles (and wrapped rather than reflected at 1,
+which could also produce `nan` frequencies). A 3.4.x build therefore
+fails `check_exact.py` on `exact_k234`, `exact_missing` and `exact_highF`, and
+as the reference for `compare_collapse.py` it produces disagreements on data with
+missing genotypes or multi-allele loci that come from the reference, not from
+`-c`. `regress_default.sh` is for comparing against a build with the same
+standard sampler (3.5.0 or later): the reflection fix changes the chain, though
+not the posterior, even for biallelic loci.
 
 `data/2pop_missing.txt` and `data/100loci_missing.txt` are missing-data variants
 of example files, made with `make_missing.py` (10% of genotypes fully missing,

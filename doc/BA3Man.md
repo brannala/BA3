@@ -1,4 +1,4 @@
-# BayesAss Edition 3.4 User's Manual
+# BayesAss Edition 3.5 User's Manual
 
 Bruce Rannala
 
@@ -361,16 +361,24 @@ Example:
 
 The -c (--collapse) option runs a collapsed MCMC sampler in which the population allele
 frequencies are integrated out analytically (a Dirichlet-multinomial marginal likelihood)
-instead of being sampled. It targets the same posterior distribution as the default sampler
-(same model and priors) but is usually much faster per iteration and mixes better, especially
-for data sets with many individuals. Missing genotypes are marginalized exactly rather than
-imputed. Inbreeding coefficients are updated by a Gibbs step on latent identity-by-descent
-indicators, so the -a and -f mixing parameters (and the allele frequency, inbreeding and
-missing genotype acceptance rates) are not used. Allele frequency output (-F and the main output
-file) is computed from draws of the frequencies given the sampled gene counts, so it has the
-same meaning as with the default sampler. With -t, the LogProb column of the trace file uses
-the collapsed (frequency-integrated) genotype likelihood, so it is not directly comparable
-with a trace from the default sampler.
+instead of being sampled. It targets exactly the same posterior distribution as the default
+sampler (same model and priors), so the two give the same answers up to Monte Carlo error,
+but the collapsed sampler is usually much faster:
+
+- Each iteration costs roughly the same regardless of the number of individuals, whereas
+  the default sampler's cost per iteration grows with the number of individuals. The advantage
+  therefore grows with sample size. On a 400-individual example data set it gave about 29
+  times more effective samples per second for the migration rates than the default sampler.
+- Missing genotypes are integrated out exactly rather than imputed.
+
+Inbreeding coefficients are updated by a Gibbs step on latent identity-by-descent indicators,
+so the -a and -f mixing parameters (and the allele frequency, inbreeding and missing genotype
+acceptance rates shown on screen) are not used. The output files have the same format and
+meaning as with the default sampler; allele frequencies (in the main output and with -F) are
+computed from draws of the frequencies given the sampled gene counts. With -t, the LogProb
+column of the trace file uses the collapsed (frequency-integrated) genotype likelihood, so it
+is not directly comparable with a trace from the default sampler. As with the default sampler,
+use enough iterations and compare several runs started with different seeds (section 6.2).
 ```
 ./BA3 -c myin.txt
 ./BA3 -c -V myin.vcf -M mymeta.txt
@@ -515,6 +523,17 @@ provides about each migration rate (higher values = more informative data).
 
 ## 7 Version History
 
+- **3.5.0** (September 2026): New collapsed sampler (-c, --collapse) that integrates out
+  allele frequencies; much faster, especially for large samples. Two bug fixes in the
+  default sampler that change results for data with missing genotypes or with loci having
+  three or more alleles: (1) imputed missing genotypes over-weighted heterozygotes by a
+  factor of 2, biasing inbreeding coefficients downward and affecting allele frequencies,
+  migration rates and ancestry probabilities; (2) the allele-frequency update lacked a
+  Jacobian term for loci with 3+ alleles and mishandled the boundary at 1 (which could also
+  produce `nan` frequencies). For complete data with only biallelic loci (e.g. SNPs without
+  missing data) the posterior is unchanged, although a run with a given seed no longer
+  reproduces its 3.4.x output exactly. Both errors are present in every version in the
+  source repository (from the 2014 import of version 3 onward).
 - **3.4.0** (December 2025): Unified executable, VCF support, auto-tuning, Savage-Dickey test,
   improved output formatting, progress bar with ETA
 - **3.0.5** (March 2023): Separate SNP/MSAT executables, bug fixes
