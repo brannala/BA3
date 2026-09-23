@@ -2007,7 +2007,12 @@ if(!NOMISSINGDATA && !gArgs.collapse)
 		alpha = gsl_rng_uniform(r);
 		if (!NOLIKELIHOOD)
 		{
-			logPrMHR = propLogL - origLogL;
+			// Target is over ORDERED genotypes (the proposal draws each allele
+			// slot independently), so a heterozygote's unordered probability
+			// (which includes the factor 2) must be halved.
+			double propOrd = propLogL - ((sampleIndiv[chooseIndiv].genotype[chosenLocus][0] != sampleIndiv[chooseIndiv].genotype[chosenLocus][1]) ? log(2.0) : 0.0);
+			double origOrd = origLogL - ((origAllele1 != origAllele2) ? log(2.0) : 0.0);
+			logPrMHR = propOrd - origOrd;
 		}
 		else
 		{
