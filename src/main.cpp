@@ -912,11 +912,12 @@ const double SS_ALPHA = 0.3;
 const double SS_RUNG_BURN = 0.4;
 static double ssBetaSched[SS_RUNGS + 1];
 static double ssMax[SS_RUNGS], ssSum[SS_RUNGS];
+static double ssMean[SS_RUNGS], ssM2[SS_RUNGS];   // per-rung mean / sum of squares of logL (Welford)
 static long ssN[SS_RUNGS];
 static void ssInit()
 {
 	for (int k = 0; k <= SS_RUNGS; k++) ssBetaSched[k] = pow((double) k / SS_RUNGS, 1.0 / SS_ALPHA);
-	for (int k = 0; k < SS_RUNGS; k++) { ssMax[k] = -INFINITY; ssSum[k] = 0.0; ssN[k] = 0; }
+	for (int k = 0; k < SS_RUNGS; k++) { ssMax[k] = -INFINITY; ssSum[k] = 0.0; ssN[k] = 0; ssMean[k] = 0.0; ssM2[k] = 0.0; }
 }
 static void ssAccum(int k, double logL)
 {
@@ -924,6 +925,7 @@ static void ssAccum(int k, double logL)
 	if (x > ssMax[k]) { ssSum[k] = ssSum[k] * exp(ssMax[k] - x) + 1.0; ssMax[k] = x; }
 	else ssSum[k] += exp(x - ssMax[k]);
 	ssN[k]++;
+	double d = logL - ssMean[k]; ssMean[k] += d / ssN[k]; ssM2[k] += d * (logL - ssMean[k]);
 }
 static double ssEvidence()
 {
@@ -2776,6 +2778,14 @@ mcmcout << "\n Population Labels:\n";
 		mcmcout << "\n Stepping-stone log marginal likelihood = " << std::setprecision(4) << std::fixed << lz
 		        << "  (" << SS_RUNGS << " rungs; genotype likelihood of ordered gene copies)\n"
 		        << " Note: posterior summaries above mix all rungs and are not meaningful with --ss.\n";
+		// Per-rung log-likelihood statistics: Var_beta(logL) = d E_beta[logL] / d beta, and
+		// SD(logL) sets the spacing of a tempering ladder (swap acceptance ~ 2 Phi(-dbeta SD / sqrt 2)).
+		mcmcout << "\n Stepping-stone rungs:\n  rung        beta        mean(logL)      SD(logL)   samples\n";
+		for (int k = 0; k < SS_RUNGS; k++)
+			mcmcout << "  " << std::setw(4) << k << std::setw(12) << std::setprecision(6) << ssBetaSched[k]
+			        << std::setw(18) << std::setprecision(3) << ssMean[k]
+			        << std::setw(14) << (ssN[k] > 1 ? sqrt(ssM2[k] / (ssN[k] - 1)) : 0.0)
+			        << std::setw(10) << ssN[k] << "\n";
 		std::cout << "\n  Stepping-stone log marginal likelihood = " << std::setprecision(4) << std::fixed << lz << "\n";
 	}
 	if (gArgs.sdpool && sdN > 0)
