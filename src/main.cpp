@@ -180,6 +180,8 @@ const double GAMMA_PROP_SD = 0.15;
 // alpha = 1 reproduces BA3's current implicit uniform prior. See
 // doc/collapsed_allele_freqs_plan.md.
 const double ALLELE_PRIOR_ALPHA = 1.0;
+// Collapsed sampler: iterations between draws of F from its full-conditional.
+const unsigned int F_DRAW_INTERVAL = 10;
 
 // Integral over [0,1] of the product of two Beta densities (midpoint rule).
 // Used for the Rao-Blackwellized Savage-Dickey test of H0: phi = rho, since the
@@ -664,8 +666,13 @@ static void initLogTab(long maxArg)
 static double **gHomLog = nullptr;
 static long   **gHomEpoch = nullptr;
 static long gHomDDim = 0, gHomEpochCur = 1;
+// The table is O(noPopln * noIndiv^2); above HOMLOG_MAX_BYTES it is not allocated
+// and the log is computed directly (gHomLog == nullptr).
+static const double HOMLOG_MAX_BYTES = 512.0 * 1024.0 * 1024.0;
 static void initHomLog(unsigned int noPopln, long nDim, long dDim)
 {
+	double bytes = (double) noPopln * nDim * dDim * (sizeof(double) + sizeof(long));
+	if (bytes > HOMLOG_MAX_BYTES) return;   // fall back to direct log()
 	gHomDDim = dDim;
 	gHomLog   = new double*[noPopln];
 	gHomEpoch = new long*[noPopln];
@@ -698,6 +705,8 @@ static inline double logGenoPredT(long ***cnt, long **cntN, unsigned int p, unsi
 		// IBD-mixture log, memoized by (n, D): shared across loci with the same
 		// homozygous count state; recomputed only when the epoch (F) changed.
 		long D = N + 1 + (long) A;
+		if (gHomLog == nullptr)
+			return logr + log(F + (1.0 - F) * (double)(n + 2) / (double) D);
 		long idx = n * gHomDDim + D;
 		if (gHomEpoch[p][idx] != gHomEpochCur)
 		{
@@ -780,6 +789,13 @@ static double computeAddLogProb(long ***cnt, long **cntN, const indiv& ind,
 // codes (stored in assign[]) so removeIndividual can undo it: for age 0/1 a
 // homozygous diploid locus draws its IBD indicator (assign=1 if IBD, one copy;
 // assign=0 if outbred, two copies); for age 2, the phase (codes 1-4).
+// Running totals for the inbreeding full-conditional F_p ~ Beta(1 + gZSum[p],
+// 1 + gZTrials[p] - gZSum[p]): gZTrials[p] = observed diploid genotypes of age-0/1
+// individuals whose copies come from population p (hemizygous male-X copies are
+// not trials), gZSum[p] = how many are currently IBD. Maintained by
+// addIndividual / removeIndividual / resampleIBD.
+static std::vector<long> gZSum, gZTrials;
+
 static double addIndividual(long ***cnt, long **cntN, const indiv& ind, unsigned char *assign,
                             unsigned int noLoci, unsigned int *noAlleles, double alpha,
                             double *FStat)
@@ -804,13 +820,14 @@ static double addIndividual(long ***cnt, long **cntN, const indiv& ind, unsigned
 			}
 			else if (a0 >= 0 && a1 >= 0)
 			{
+				gZTrials[p]++;
 				if (a0 == a1)   // homozygote: sample the IBD indicator
 				{
 					double rr  = addRatio(cnt, cntN, p, l, a0, A, alpha);
 					double rr2 = (cnt[p][l][a0] + 1 + alpha) / (cntN[p][l] + 1 + A * alpha);
 					double pz1 = F * rr, pz0 = (1.0 - F) * rr * rr2;
 					if (gsl_rng_uniform(r) < pz1 / (pz1 + pz0))
-					{ addCopy(cnt, cntN, p, l, a0); assign[l] = 1; }          // IBD: one copy
+					{ addCopy(cnt, cntN, p, l, a0); assign[l] = 1; gZSum[p]++; }   // IBD: one copy
 					else
 					{ addCopy(cnt, cntN, p, l, a0); addCopy(cnt, cntN, p, l, a0); }  // outbred: two copies
 				}
@@ -885,10 +902,12 @@ static void removeIndividual(long ***cnt, long **cntN, const indiv& ind,
 			}
 			else if (a0 >= 0 && a1 >= 0)
 			{
+				gZTrials[p]--;
 				if (a0 == a1)                    // homozygote: 1 copy if IBD, else 2
 				{
 					removeCopy(cnt, cntN, p, l, a0);
 					if (assign[l] != 1) removeCopy(cnt, cntN, p, l, a0);
+					else gZSum[p]--;
 				}
 				else { removeCopy(cnt, cntN, p, l, a0); removeCopy(cnt, cntN, p, l, a1); }
 			}
@@ -915,43 +934,75 @@ static void removeIndividual(long ***cnt, long **cntN, const indiv& ind,
 	}
 }
 
-// Inbreeding update (collapsed sampler). Gibbs-resample the IBD indicator of
-// every same-population diploid homozygous genotype (age 0/1), keeping the count
-// tables consistent, then draw each population's F from its Beta full-conditional
-// F_p ~ Beta(1 + #IBD, 1 + #diploid - #IBD). Heterozygotes are outbred (z fixed 0)
-// but still count as trials. O(noIndiv * noLoci).
-static void inbreedingUpdate(long ***cnt, long **cntN, indiv *ind, unsigned char **assign,
-                             unsigned int noIndiv, unsigned int noLoci, unsigned int *noAlleles,
-                             unsigned int noPopln, double alpha, double *FStat)
+// Inbreeding update (collapsed sampler), part 1: Gibbs-resample the IBD
+// indicators of one individual's diploid homozygous genotypes (age 0/1 only;
+// hybrids are outbred; hemizygous male-X copies have no IBD indicator), keeping
+// the count tables and gZSum consistent. O(noLoci). Called for one random
+// individual per iteration, while F is redrawn every F_DRAW_INTERVAL iterations
+// (part 2, drawF): this avoids the slow IBD-indicator <-> F coupling of a
+// once-per-sweep F update, which converged very slowly at high F.
+static void resampleIBD(long ***cnt, long **cntN, const indiv& ind, unsigned char *assign,
+                        unsigned int noLoci, unsigned int *noAlleles, double alpha, double *FStat)
 {
-	std::vector<long> zSum(noPopln, 0), zTrials(noPopln, 0);
-	for (unsigned int i = 0; i < noIndiv; i++)
+	if (ind.migrantAge == 2) return;
+	unsigned int p = copyPop(ind);
+	double F = FStat[p];
+	const GenotypeType (*g)[2] = ind.genotype;
+	for (unsigned int l = 0; l < noLoci; l++)
 	{
-		if (ind[i].migrantAge == 2) continue;      // hybrids are outbred (no F)
-		unsigned int p = copyPop(ind[i]);
-		double F = FStat[p];
-		const GenotypeType (*g)[2] = ind[i].genotype;
+		unsigned int A = noAlleles[l]; if (A == 0) continue;
+		int a0 = g[l][0], a1 = g[l][1];
+		if (a1 == HEMIZYGOUS || a0 < 0 || a1 < 0 || a0 != a1) continue;
+		removeCopy(cnt, cntN, p, l, a0);
+		if (assign[l] != 1) removeCopy(cnt, cntN, p, l, a0);
+		else gZSum[p]--;
+		double rr  = (cnt[p][l][a0] + alpha) / (cntN[p][l] + A * alpha);
+		double rr2 = (cnt[p][l][a0] + 1 + alpha) / (cntN[p][l] + 1 + A * alpha);
+		double pz1 = F * rr, pz0 = (1.0 - F) * rr * rr2;
+		if (gsl_rng_uniform(r) < pz1 / (pz1 + pz0))
+		{ addCopy(cnt, cntN, p, l, a0); assign[l] = 1; gZSum[p]++; }
+		else
+		{ addCopy(cnt, cntN, p, l, a0); addCopy(cnt, cntN, p, l, a0); assign[l] = 0; }
+	}
+}
+
+// Inbreeding update, part 2: F_p from its Beta full-conditional (uniform prior).
+static void drawF(unsigned int noPopln, double *FStat)
+{
+	for (unsigned int p = 0; p < noPopln; p++)
+		FStat[p] = gsl_ran_beta(r, 1.0 + (double) gZSum[p], 1.0 + (double)(gZTrials[p] - gZSum[p]));
+}
+
+// Moment estimate F = 1 - Hobs/Hexp per sampled population (diploid genotypes),
+// used only to start the collapsed chain near the posterior; clamped to [0, 0.99].
+static void momentF(indiv *ind, unsigned int noIndiv, unsigned int noLoci, unsigned int *noAlleles,
+                    long ***cnt, long **cntN, unsigned int noPopln, double *FStat)
+{
+	for (unsigned int p = 0; p < noPopln; p++)
+	{
+		double het = 0.0, obs = 0.0, hexp = 0.0; long nl = 0;
+		for (unsigned int i = 0; i < noIndiv; i++)
+		{
+			if (ind[i].samplePopln != p) continue;
+			for (unsigned int l = 0; l < noLoci; l++)
+			{
+				int a0 = ind[i].genotype[l][0], a1 = ind[i].genotype[l][1];
+				if (a1 == HEMIZYGOUS || a0 < 0 || a1 < 0) continue;
+				obs += 1.0; if (a0 != a1) het += 1.0;
+			}
+		}
 		for (unsigned int l = 0; l < noLoci; l++)
 		{
-			unsigned int A = noAlleles[l]; if (A == 0) continue;
-			int a0 = g[l][0], a1 = g[l][1];
-			if (a1 == HEMIZYGOUS || a0 < 0 || a1 < 0) continue;   // not a diploid genotype
-			zTrials[p]++;
-			if (a0 != a1) { assign[i][l] = 0; continue; }          // het: outbred
-			// homozygote: remove its current contribution, resample IBD, re-add
-			removeCopy(cnt, cntN, p, l, a0);
-			if (assign[i][l] != 1) removeCopy(cnt, cntN, p, l, a0);
-			double rr  = (cnt[p][l][a0] + alpha) / (cntN[p][l] + A * alpha);
-			double rr2 = (cnt[p][l][a0] + 1 + alpha) / (cntN[p][l] + 1 + A * alpha);
-			double pz1 = F * rr, pz0 = (1.0 - F) * rr * rr2;
-			if (gsl_rng_uniform(r) < pz1 / (pz1 + pz0))
-			{ addCopy(cnt, cntN, p, l, a0); assign[i][l] = 1; zSum[p]++; }
-			else
-			{ addCopy(cnt, cntN, p, l, a0); addCopy(cnt, cntN, p, l, a0); assign[i][l] = 0; }
+			if (noAlleles[l] == 0 || cntN[p][l] == 0) continue;
+			double s2 = 0.0;
+			for (unsigned int a = 0; a < noAlleles[l]; a++)
+			{ double f = (double) cnt[p][l][a] / cntN[p][l]; s2 += f * f; }
+			hexp += 1.0 - s2; nl++;
 		}
+		double F = 0.0;
+		if (obs > 0 && nl > 0 && hexp > 0) F = 1.0 - (het / obs) / (hexp / nl);
+		FStat[p] = F < 0.0 ? 0.0 : (F > 0.99 ? 0.99 : F);
 	}
-	for (unsigned int p = 0; p < noPopln; p++)
-		FStat[p] = gsl_ran_beta(r, 1.0 + (double) zSum[p], 1.0 + (double)(zTrials[p] - zSum[p]));
 }
 
 // --- Stepping-stone marginal-likelihood estimation (--ss) ---
@@ -1364,6 +1415,13 @@ common_processing:
 			   sampleIndiv[i].genotype[j][0] = gsl_rng_uniform_int(r, noAlleles[j]);
 			   sampleIndiv[i].genotype[j][1] = gsl_rng_uniform_int(r, noAlleles[j]);
 			 }
+		       else
+			 {
+			   // a half-missing genotype is treated as wholly missing, as in the
+			   // standard sampler (which imputes both alleles)
+			   sampleIndiv[i].genotype[j][0] = -1;
+			   sampleIndiv[i].genotype[j][1] = -1;
+			 }
 		       if (!hasMissing)
 			 {
 			   missingData.push_back(i);
@@ -1694,12 +1752,22 @@ common_processing:
 		// [0, 2*noIndiv + maxAlleles + 1]; +3 slack on each dimension.
 		initHomLog(noPopln, 2L * (long)noIndiv + 3, 2L * (long)noIndiv + (long)maxAlleles + 3);
 		initCountsNative(gCount, gCountN, sampleIndiv, noIndiv, noLoci, noAlleles, noPopln);
+		gZSum.assign(noPopln, 0); gZTrials.assign(noPopln, 0);
+		for (unsigned int i = 0; i < noIndiv; i++)
+			for (unsigned int l = 0; l < noLoci; l++)
+			{
+				int a0 = sampleIndiv[i].genotype[l][0], a1 = sampleIndiv[i].genotype[l][1];
+				if (noAlleles[l] > 0 && a1 != HEMIZYGOUS && a0 >= 0 && a1 >= 0)
+					gZTrials[sampleIndiv[i].samplePopln]++;
+			}
 		double cll = collapsedLogLik(gCount, gCountN, noPopln, noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
-		std::cout << "collapsed init logL (Dirichlet-multinomial, alpha="
-		          << ALLELE_PRIOR_ALPHA << "): " << std::setprecision(8) << cll << "\n";
 
-		// Phase-2 gate (init state is all-native, so gAssign is unused here).
+		// Self-check (debug), from the all-native, F = 0 start: removing then
+		// re-adding each individual must reproduce the full recomputed log-marginal.
+		if (gArgs.debug)
 		{
+			std::cout << "collapsed init logL (Dirichlet-multinomial, alpha="
+			          << ALLELE_PRIOR_ALPHA << "): " << std::setprecision(8) << cll << "\n";
 			double base = cll, maxDiff = 0.0;
 			unsigned int cap = noIndiv < 200 ? noIndiv : 200;   // bound the O(P*L) recomputes
 			for(unsigned int i = 0; i < cap; i++)
@@ -1718,7 +1786,28 @@ common_processing:
 			          << "  -> " << ((maxDiff < 1e-6 && std::fabs(restored - base) < 1e-6) ? "PASS" : "FAIL")
 			          << "\n";
 		}
+
+		// Start F at its moment estimate and draw the IBD indicators given it (not
+		// with --ss, which runs at F = 0, or when F is not estimated).
+		if (!NOLIKELIHOOD && !NOFSTATMCMC)
+		{
+			momentF(sampleIndiv, noIndiv, noLoci, noAlleles, gCount, gCountN, noPopln, FStat);
+			for (unsigned int i = 0; i < noIndiv; i++)
+				resampleIBD(gCount, gCountN, sampleIndiv[i], gAssign[i], noLoci, noAlleles, ALLELE_PRIOR_ALPHA, FStat);
+		}
 	}
+
+	// Genotype log-likelihood for the trace/progress display. Standard sampler:
+	// sum of per-individual logL. Collapsed sampler: the Dirichlet-multinomial
+	// log-marginal of the current count tables (frequencies integrated out).
+	auto genotypeLogL = [&]() -> double
+	{
+		if (gArgs.collapse)
+			return collapsedLogLik(gCount, gCountN, noPopln, noLoci, noAlleles, ALLELE_PRIOR_ALPHA);
+		double sgl = 0.0;
+		for (unsigned int m = 0; m < noIndiv; m++) sgl += sampleIndiv[m].logL;
+		return sgl;
+	};
 
 	if(gArgs.debug)
 	{
@@ -2072,10 +2161,20 @@ if(!NOALLELEMCMC && !gArgs.collapse)
 
 	propAlleleFreq[chosenAllele] = 	std::fabs(alleleFreqs[chosenPopln][chosenLocus][chosenAllele]+(gsl_rng_uniform(r)-0.5)*gArgs.deltaA);
 
-	// added July 20, 2011 (further modified Nov 7, 2011)
+	// Reflect at 1 (the |.| above reflects at 0) so the proposal on p_j is symmetric.
 	if (propAlleleFreq[chosenAllele] > 1.0) {
-		propAlleleFreq[chosenAllele] = std::fabs(1.0 - propAlleleFreq[chosenAllele]);
+		propAlleleFreq[chosenAllele] = 2.0 - propAlleleFreq[chosenAllele];
 	}
+	// The other alleles are rescaled by c = (1-p_j')/(1-p_j), keeping their relative
+	// proportions fixed. In (p_j, proportions) coordinates the move is symmetric, and
+	// the Jacobian back to the simplex is (1-p_j)^(K-2), giving the log Hastings term
+	// (K-2)*log(c) in the acceptance ratio.
+	double logJacobian = 0.0;
+	bool degenerate = !(propAlleleFreq[chosenAllele] > 0.0 && propAlleleFreq[chosenAllele] < 1.0)
+	                  || !(alleleFreqs[chosenPopln][chosenLocus][chosenAllele] < 1.0);
+	if (!degenerate)
+		logJacobian = (noAlleles[chosenLocus] - 2.0) *
+		              (log(1.0 - propAlleleFreq[chosenAllele]) - log(1.0 - alleleFreqs[chosenPopln][chosenLocus][chosenAllele]));
 
 	for (unsigned int l=0; l<noAlleles[chosenLocus]; l++)
 		if(l!=chosenAllele)
@@ -2117,17 +2216,22 @@ if(!NOALLELEMCMC && !gArgs.collapse)
 		}
 	}
 
-	// Acceptance-rejection step
-	// Note: No Jacobian correction needed here because the rescaling proposal is symmetric
-	// (the forward and reverse transformations are exact inverses)
+	// Acceptance-rejection step (Jacobian term from the rescaling of the other alleles)
 	alpha = gsl_rng_uniform(r);
 	if (!NOLIKELIHOOD)
 	{
-		logPrMHR = dtLogL;
+		logPrMHR = dtLogL + logJacobian;
 	}
 	else
 	{
-		logPrMHR = 0.0;
+		logPrMHR = logJacobian;
+	}
+	for (unsigned int l=0; l<noAlleles[chosenLocus]; l++)
+		if (!(propAlleleFreq[l] > 0.0 && propAlleleFreq[l] < 1.0)) degenerate = true;
+	if (degenerate || !std::isfinite(logPrMHR))
+	{
+		logPrMHR = -INFINITY;   // reject proposals that leave the open simplex
+		alpha = 1.0;            // (gsl_rng_uniform can return 0; make rejection certain)
 	}
 
 	if(alpha <= exp(logPrMHR))
@@ -2225,17 +2329,18 @@ if(!NOFSTATMCMC && !gArgs.collapse)
 }
 
 // Collapsed sampler: inbreeding via the IBD-indicator Gibbs (replaces the FStat
-// MH), keeping the count tables consistent and drawing F from its conjugate Beta.
-// The full sweep is O(noIndiv*noLoci), so it is run once every noIndiv iterations
-// (amortized O(noLoci), matching the ancestry move); F is a strong all-data Gibbs
-// so this periodic cadence mixes well. Individuals whose ancestry changes have
-// their IBD indicators resampled by addIndividual in the meantime.
-if(gArgs.collapse && !NOLIKELIHOOD && !NOFSTATMCMC
-   && (i % (noIndiv > 1 ? noIndiv : 1) == 0))
+// MH). Each iteration refreshes one random individual's IBD indicators (O(noLoci))
+// and every F_DRAW_INTERVAL iterations F is redrawn from its Beta full-conditional
+// using the running totals.
+if(gArgs.collapse && !NOLIKELIHOOD && !NOFSTATMCMC)
 {
-	inbreedingUpdate(gCount, gCountN, sampleIndiv, gAssign, noIndiv, noLoci,
-	                 noAlleles, noPopln, ALLELE_PRIOR_ALPHA, FStat);
-	gHomEpochCur++;   // F changed: invalidate the homozygote-mixture memo (O(1))
+	unsigned int jF = gsl_rng_uniform_int(r, noIndiv);
+	resampleIBD(gCount, gCountN, sampleIndiv[jF], gAssign[jF], noLoci, noAlleles, ALLELE_PRIOR_ALPHA, FStat);
+	if (i % F_DRAW_INTERVAL == 0)
+	{
+		drawF(noPopln, FStat);
+		gHomEpochCur++;   // F changed: invalidate the homozygote-mixture memo (O(1))
+	}
 }
 
 if(!NOMISSINGDATA && !gArgs.collapse)
@@ -2257,7 +2362,12 @@ if(!NOMISSINGDATA && !gArgs.collapse)
 		alpha = gsl_rng_uniform(r);
 		if (!NOLIKELIHOOD)
 		{
-			logPrMHR = propLogL - origLogL;
+			// Target is over ORDERED genotypes (the proposal draws each allele
+			// slot independently), so a heterozygote's unordered probability
+			// (which includes the factor 2) must be halved.
+			double propOrd = propLogL - ((sampleIndiv[chooseIndiv].genotype[chosenLocus][0] != sampleIndiv[chooseIndiv].genotype[chosenLocus][1]) ? log(2.0) : 0.0);
+			double origOrd = origLogL - ((origAllele1 != origAllele2) ? log(2.0) : 0.0);
+			logPrMHR = propOrd - origOrd;
 		}
 		else
 		{
@@ -2516,7 +2626,7 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 		if(gArgs.trace && ((i % gArgs.sampling)==0))
 		{
 			double logLG=0.0, logLM=0.0;
-			for (unsigned int m=0; m < noIndiv; m++) { logLG += sampleIndiv[m].logL; }
+			logLG = genotypeLogL();
 			logLM = migCountLogProb(migrantCounts,migrationRates,noPopln,gamma);
 			tracefile << i << "\t" << logLM + logLG << "\t";
 		}
@@ -2532,7 +2642,7 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 				double logLG=0.0, logLM=0.0;
 				if (!NOLIKELIHOOD)
 				{
-					for(unsigned int m=0; m < noIndiv; m++) { logLG += sampleIndiv[m].logL; }
+					logLG = genotypeLogL();
 				}
 				else
 				{
@@ -2555,7 +2665,7 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 				double logLG=0.0, logLM=0.0;
 				if (!NOLIKELIHOOD)
 				{
-					for(unsigned int m=0; m < noIndiv; m++) { logLG += sampleIndiv[m].logL; }
+					logLG = genotypeLogL();
 				}
 				else
 				{
@@ -3064,6 +3174,27 @@ mcmcout << "\n Population Labels:\n";
 		std::cout << "  Allele frequencies: " << gArgs.freqFileName << "\n";
 	std::cout << "\n";
 
+	// Debug: recount the collapsed sampler's IBD / diploid-genotype totals from
+	// the latent codes and compare with the running totals.
+	if (gArgs.collapse && gArgs.debug && !NOLIKELIHOOD)
+	{
+		std::vector<long> zs(noPopln, 0), zt(noPopln, 0);
+		for (unsigned int i = 0; i < noIndiv; i++)
+		{
+			if (sampleIndiv[i].migrantAge == 2) continue;
+			unsigned int p = copyPop(sampleIndiv[i]);
+			for (unsigned int l = 0; l < noLoci; l++)
+			{
+				int a0 = sampleIndiv[i].genotype[l][0], a1 = sampleIndiv[i].genotype[l][1];
+				if (noAlleles[l] == 0 || a1 == HEMIZYGOUS || a0 < 0 || a1 < 0) continue;
+				zt[p]++;
+				if (a0 == a1 && gAssign[i][l] == 1) zs[p]++;
+			}
+		}
+		bool ok = (zs == gZSum) && (zt == gZTrials);
+		std::cout << "collapsed IBD totals recount: " << (ok ? "PASS" : "FAIL") << "\n";
+	}
+
 	// Free genotypes before freeing sampleIndiv
 	freeGenotypes(sampleIndiv, noIndiv);
 	delete[] sampleIndiv;
@@ -3115,9 +3246,12 @@ mcmcout << "\n Population Labels:\n";
 		for(unsigned int i = 0; i < noIndiv; i++) delete[] gAssign[i];
 		delete[] gAssign;
 		delete[] gLogTab; gLogTab = nullptr;
-		for(unsigned int p = 0; p < noPopln; p++) { delete[] gHomLog[p]; delete[] gHomEpoch[p]; }
-		delete[] gHomLog;   gHomLog = nullptr;
-		delete[] gHomEpoch; gHomEpoch = nullptr;
+		if (gHomLog != nullptr)
+		{
+			for(unsigned int p = 0; p < noPopln; p++) { delete[] gHomLog[p]; delete[] gHomEpoch[p]; }
+			delete[] gHomLog;   gHomLog = nullptr;
+			delete[] gHomEpoch; gHomEpoch = nullptr;
+		}
 	}
 
 	// Free migrationRates, avgMigrationRates, varMigrationRates (2D arrays: noPopln x noPopln+1)
