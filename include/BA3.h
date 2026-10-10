@@ -90,10 +90,9 @@ struct ancestryProbs
 // Structure for Savage-Dickey density ratio test statistics
 struct SavageDickeyStats
 {
-	double kernelSum;      // Sum of kernel evaluations at zero
 	double sumM;           // Running sum of migration rates (for mean)
 	double sumM2;          // Running sum of squared migration rates (for variance)
-	long int countNearZero; // Count of samples where m < threshold
+	long int countZero;    // Samples with no sampled migrant on the route
 	long int nSamples;     // Total number of samples
 	std::vector<double> samples; // Stored samples for KL divergence computation
 };
@@ -118,9 +117,9 @@ int countNonEmptyAncestryCategories(long int ***migrantCounts, unsigned int samp
 // Savage-Dickey density ratio test functions
 void initSavageDickeyStats(SavageDickeyStats **sdStats, unsigned int noPopln);
 void updateSavageDickeyStats(SavageDickeyStats **sdStats, double **migrationRates,
-                              unsigned int noPopln, double bandwidth);
-void computeSavageDickeyBayesFactors(SavageDickeyStats **sdStats, unsigned int noPopln,
-                                      double priorDensityAtZero, std::ostream &out,
+                              long int ***migrantCounts, unsigned int noPopln);
+void computeSavageDickeyBayesFactors(SavageDickeyStats **sdStats, long int ***migrantCounts,
+                                      unsigned int noPopln, std::ostream &out,
                                       const std::vector<std::string> &poplnNames);
 void freeSavageDickeyStats(SavageDickeyStats **sdStats, unsigned int noPopln);
 

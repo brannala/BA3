@@ -4,7 +4,8 @@
 For each data set in tests/data/exact_*.txt, computes the exact posterior with
 tests/exact_posterior.py, runs every build R times (different seeds), and compares
 each reported posterior mean and SD -- migration rates, F, allele frequencies
-(-F file) and individual ancestry probabilities (BA3indiv.txt) -- with the exact
+(-F file), individual ancestry probabilities (BA3indiv.txt) and Savage-Dickey
+Bayes factors for m = 0 -- with the exact
 value:  z = (mean over seeds - exact) / sqrt(SE^2 + floor^2), where SE is the
 between-seed standard error and floor absorbs the printed rounding. A group fails
 if any |z| > 4 or more than 2% of its |z| exceed 3.
@@ -21,7 +22,7 @@ import argparse, glob, json, math, os, re, shutil, subprocess, sys, tempfile
 from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-FLOOR = {"m": 5e-5, "F": 5e-5, "theta": 5e-5, "freq": 5e-6, "anc": 5e-4}
+FLOOR = {"p0": 5e-5, "bf": 5e-3, "m": 5e-5, "F": 5e-5, "theta": 5e-5, "freq": 5e-6, "anc": 5e-4}
 
 
 def parse(d):
@@ -38,6 +39,10 @@ def parse(d):
         for j, (m, s) in enumerate(re.findall(r"([0-9.]+)\(([0-9.]+)\)", mm.group(2))):
             if str(j) != i:
                 out[f"m[{labels[i]}][{labels[str(j)]}]"] = (float(m), float(s))
+    for j, i, p0, bf in re.findall(r"^\s*\[\s*(\d+)\]\s+\[\s*(\d+)\]\s+\S+\s+([0-9.]+)\s+<?([0-9.eE+-]+)\s",
+                                   txt.split("Savage-Dickey")[1].split("Inbreeding Coefficients")[0], re.M):
+        out[f"p0[{labels[i]}][{labels[j]}]"] = (float(p0), None)
+        out[f"bf[{labels[i]}][{labels[j]}]"] = (float(bf), None)
     for q, name, m, s in re.findall(r"\[\s*(\d+)\]\s+(\S+)\s+([0-9.]+)\(([0-9.]+)\)",
                                      txt.split("Inbreeding Coefficients")[1].split("Drift from Ancestral")[0]):
         out[f"F[{name}]"] = (float(m), float(s))

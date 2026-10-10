@@ -139,7 +139,7 @@ def main():
         anc = [St[n][cfg[n]] for n in range(N)]
         # ---- prior of the labelled ancestry assignment, m integrated out
         logPA = 0.0
-        Em, Em2 = {}, {}
+        Em, Em2, Z0 = {}, {}, {}
         for s in range(P):
             members = [anc[n] for n in range(N) if samp[n] == s]
             n0 = sum(1 for src, age in members if age == 0)
@@ -152,6 +152,7 @@ def main():
             for j, cj in c.items():
                 Em[(s, j)] = (cj + 1) / a0 / 3.0
                 Em2[(s, j)] = (cj + 1) * (cj + 2) / (a0 * (a0 + 1)) / 9.0
+                Z0[(s, j)] = cj == 0
         # ---- genotype likelihood: per locus, sum over latent options, as a function of F
         # per locus: dict exponent-key -> scalar sum, plus freq moment sums
         loc_W, loc_M = [], []
@@ -216,6 +217,7 @@ def main():
         for (s, j), v in Em.items():
             acc[("m", s, j, 1)] += wt * v
             acc[("m", s, j, 2)] += wt * Em2[(s, j)]
+            acc[("z0", s, j)] += wt * Z0[(s, j)]
         for q in range(P):
             acc[("F", q, 1)] += wt * float(np.dot(gw, prodW * Fg[q])) / like
             acc[("F", q, 2)] += wt * float(np.dot(gw, prodW * Fg[q] ** 2)) / like
@@ -237,6 +239,9 @@ def main():
                 continue
             m1, m2 = acc[("m", s, j, 1)] / Z, acc[("m", s, j, 2)] / Z
             out[f"m[{pname[s]}][{pname[j]}]"] = (m1, math.sqrt(max(m2 - m1 * m1, 0)))
+            # Savage-Dickey BF_01 for m = 0: Pr(c = 0) (n_s+P-1)/(P-1)
+            out[f"p0[{pname[s]}][{pname[j]}]"] = (acc[("z0", s, j)] / Z, None)
+            out[f"bf[{pname[s]}][{pname[j]}]"] = (acc[("z0", s, j)] / Z * (samp.count(s) + P - 1) / (P - 1), None)
     for q in range(P):
         f1, f2 = acc[("F", q, 1)] / Z, acc[("F", q, 2)] / Z
         out[f"F[{pname[q]}]"] = (f1, math.sqrt(max(f2 - f1 * f1, 0)))
@@ -252,8 +257,8 @@ def main():
     if a.json:
         json.dump({"post": out}, open(a.json, "w"), indent=1)
     for k in sorted(out):
-        if not k.startswith("anc") and not k.startswith("freq"):
-            print(f"{k:10s} mean {out[k][0]:.5f}  SD {out[k][1]:.5f}")
+        if k.startswith(("m[", "F[", "bf[")):
+            print(f"{k:10s} mean {out[k][0]:.5f}" + (f"  SD {out[k][1]:.5f}" if out[k][1] is not None else ""))
     print(f"({len(configs)} ancestry configurations, {nodes} quadrature nodes per F)")
 
 

@@ -2,12 +2,15 @@
 # Regression test: the standard (non --collapse) sampler must be byte-identical
 # to a reference BA3 build for the same seed. Every output file (results, trace,
 # per-individual, allele-frequency) and stdout is compared; only the wall-clock
-# "Elapsed time" line and the progress bar's ETA are excluded.
+# "Elapsed time" line and the progress bar's ETA are excluded. With --no-sd the
+# Savage-Dickey table in out.txt is excluded too (for references built before
+# the exact Bayes factor replaced the kernel estimate).
 #
-# usage: tests/regress_default.sh <reference BA3> <new BA3> [iters=20000]
+# usage: tests/regress_default.sh [--no-sd] <reference BA3> <new BA3> [iters=20000]
 #   e.g. build master into /tmp/ref and run
 #        tests/regress_default.sh /tmp/ref/BA3 ./BA3
 set -uo pipefail
+NOSD=0; [ "${1:-}" = --no-sd ] && { NOSD=1; shift; }
 
 REF="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 NEW="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
@@ -37,6 +40,9 @@ run() {  # run <bin> <dir> <opts> <input args>
 	mkdir -p "$2"
 	( cd "$2" && "$1" $3 -s 7 -i "$ITERS" -b "$BURN" -n 50 -o out.txt $4 \
 		2>&1 | tr '\r' '\n' | sed -E 's/ETA: .*//' | grep -v 'Elapsed time' > stdout.txt )
+	if [ "$NOSD" = 1 ] && [ -f "$2/out.txt" ]; then
+		sed -i.bak '/Savage-Dickey Density Ratio/,/KL(bits) = information gain/d' "$2/out.txt" && rm -f "$2/out.txt.bak"
+	fi
 }
 
 fail=0; n=0

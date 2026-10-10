@@ -180,7 +180,7 @@ def main():
     for cfg in configs:
         anc = [St[n][cfg[n]] for n in range(N)]
         logPA = 0.0
-        Em, Em2 = {}, {}
+        Em, Em2, Z0 = {}, {}, {}
         for s in range(P):
             members = [anc[n] for n in range(N) if samp[n] == s]
             n0 = sum(1 for src, age in members if age == 0)
@@ -193,6 +193,7 @@ def main():
             for j, cj in c.items():
                 Em[(s, j)] = (cj + 1) / a0 / 3.0
                 Em2[(s, j)] = (cj + 1) * (cj + 2) / (a0 * (a0 + 1)) / 9.0
+                Z0[(s, j)] = cj == 0
 
         # per locus: factor over (F grid) x (theta grid), and its moment versions
         loc = []
@@ -241,6 +242,7 @@ def main():
         for (s, j), v in Em.items():
             acc[("m", s, j, 1)] += wt * v
             acc[("m", s, j, 2)] += wt * Em2[(s, j)]
+            acc[("z0", s, j)] += wt * Z0[(s, j)]
         post = W2 * prod / like
         for q in range(P):
             fq = Fg[q][:, None]
@@ -267,6 +269,9 @@ def main():
             if s != j:
                 m1, m2 = acc[("m", s, j, 1)] / Z, acc[("m", s, j, 2)] / Z
                 out[f"m[{pname[s]}][{pname[j]}]"] = (m1, math.sqrt(max(m2 - m1 * m1, 0)))
+                # Savage-Dickey BF_01 for m = 0: Pr(c = 0) (n_s+P-1)/(P-1)
+                out[f"p0[{pname[s]}][{pname[j]}]"] = (acc[("z0", s, j)] / Z, None)
+                out[f"bf[{pname[s]}][{pname[j]}]"] = (acc[("z0", s, j)] / Z * (samp.count(s) + P - 1) / (P - 1), None)
     for q in range(P):
         for nm in ("F", "theta"):
             f1, f2 = acc[(nm, q, 1)] / Z, acc[(nm, q, 2)] / Z
@@ -284,8 +289,8 @@ def main():
     if a.json:
         json.dump({"post": out}, open(a.json, "w"), indent=1)
     for k in sorted(out):
-        if k.startswith(("m[", "F[", "theta[")):
-            print(f"{k:14s} mean {out[k][0]:.5f}  SD {out[k][1]:.5f}")
+        if k.startswith(("m[", "F[", "theta[", "bf[")):
+            print(f"{k:14s} mean {out[k][0]:.5f}" + (f"  SD {out[k][1]:.5f}" if out[k][1] is not None else ""))
     print(f"({len(configs)} ancestry configurations; nodes F {nF}, theta {a.nodes_theta}, "
           f"pi {a.nodes_pi}/stick)")
 

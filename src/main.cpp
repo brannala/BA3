@@ -1545,8 +1545,6 @@ common_processing:
 		sdStats[i] = new SavageDickeyStats[noPopln];
 	}
 	initSavageDickeyStats(sdStats, noPopln);
-	const double SD_BANDWIDTH = 0.02;  // Reference bandwidth for kernel density estimation
-	const double PRIOR_DENSITY_AT_ZERO = 3.0;  // Prior is Uniform(0, 1/3), so density = 3
 
 	for(unsigned int l=0; l<noPopln; l++)
 	{
@@ -2495,7 +2493,7 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 				}
 
 			// Update Savage-Dickey statistics for migration rate hypothesis testing
-			updateSavageDickeyStats(sdStats, migrationRates, noPopln, SD_BANDWIDTH);
+			updateSavageDickeyStats(sdStats, migrationRates, migrantCounts, noPopln);
 
 			double dirAlpha[MAXALLELE];
 			double dirDraw[MAXALLELE];
@@ -2682,7 +2680,7 @@ mcmcout << "\n Population Labels:\n";
 	}
 
 	// Output Savage-Dickey test results for zero migration hypotheses
-	computeSavageDickeyBayesFactors(sdStats, noPopln, PRIOR_DENSITY_AT_ZERO, mcmcout, poplnNames);
+	computeSavageDickeyBayesFactors(sdStats, migrantCounts, noPopln, mcmcout, poplnNames);
 
 	mcmcout << "\n Inbreeding Coefficients:\n";
 	mcmcout << " Index  Population                     F(SD)\n";
@@ -3803,61 +3801,61 @@ int countNonEmptyAncestryCategories(long int ***migrantCounts, unsigned int samp
 /*
  * Savage-Dickey Density Ratio Test Functions
  *
- * These functions implement the Savage-Dickey density ratio test for
- * testing the null hypothesis H0: m_ij = 0 (no migration from pop j to pop i)
- * against the alternative H1: m_ij > 0.
+ * Tests H0: m_ij = 0 (no migration from pop j into pop i) against H1: m_ij > 0
+ * by BF_01 = p(m_ij = 0 | data) / p(m_ij = 0).
  *
- * The Bayes factor is: BF_01 = p(m_ij=0|data) / p(m_ij=0|prior)
+ * The prior on row i is flat on {m_ij >= 0, sum_{j!=i} m_ij <= 1/3}, i.e.
+ * u = 3m is Dirichlet(1,...,1) over K = noPopln categories (K-1 sources plus
+ * non-migrants), so the marginal prior of u_ij is Beta(1, K-1), with density
+ * K-1 at zero. Given the ancestry counts of the n_i individuals sampled in pop
+ * i, the full conditional of u is Dirichlet(n0+1, c_ij+1, ...), where c_ij
+ * counts first- and second-generation migrants from j; the marginal of u_ij is
+ * Beta(c_ij+1, n_i+K-1-c_ij), whose density at zero is n_i+K-1 if c_ij = 0 and
+ * 0 otherwise. Averaging this over the MCMC sample (Rao-Blackwellization) gives
  *
- * We use a boundary-corrected kernel density estimate (reflection method)
- * to estimate the posterior density at zero.
+ *     BF_01 = Pr(c_ij = 0 | data) * (n_i+K-1)/(K-1),
+ *
+ * exact up to Monte Carlo error (the Jacobian of m = u/3 cancels). The evidence
+ * for H0 is therefore bounded by (n_i+K-1)/(K-1), however many loci are typed:
+ * it grows only with the number of individuals sampled in the recipient pop.
+ *
+ * (Versions up to 3.5.0 estimated the posterior density at zero by a kernel
+ * density estimate, normalized with a different bandwidth from the one used to
+ * accumulate it, and divided by a prior density of 3 instead of 3(K-1); BF_01
+ * was overstated by a factor of about 30 with 10 populations.)
  */
-
-// Threshold for counting samples "near zero"
-const double SD_NEAR_ZERO_THRESHOLD = 0.005;
 
 // Initialize Savage-Dickey statistics structure
 void initSavageDickeyStats(SavageDickeyStats **sdStats, unsigned int noPopln)
 {
 	for (unsigned int i = 0; i < noPopln; i++) {
 		for (unsigned int j = 0; j < noPopln; j++) {
-			sdStats[i][j].kernelSum = 0.0;
 			sdStats[i][j].sumM = 0.0;
 			sdStats[i][j].sumM2 = 0.0;
-			sdStats[i][j].countNearZero = 0;
+			sdStats[i][j].countZero = 0;
 			sdStats[i][j].nSamples = 0;
 		}
 	}
 }
 
-// Update Savage-Dickey statistics with current migration rate samples
-// Uses Gaussian kernel: K(x) = exp(-x^2 / (2*h^2))
+// Update Savage-Dickey statistics with the current migration rates and
+// ancestry counts (migrantCounts[dest][source][age])
 void updateSavageDickeyStats(SavageDickeyStats **sdStats, double **migrationRates,
-                              unsigned int noPopln, double bandwidth)
+                              long int ***migrantCounts, unsigned int noPopln)
 {
 	for (unsigned int i = 0; i < noPopln; i++) {
 		for (unsigned int j = 0; j < noPopln; j++) {
 			if (i == j) continue;  // Skip diagonal (non-migration)
 
 			double m = migrationRates[i][j];
-
-			// Update running sums for mean and variance
 			sdStats[i][j].sumM += m;
 			sdStats[i][j].sumM2 += m * m;
 			sdStats[i][j].nSamples++;
+			if (migrantCounts[i][j][1] + migrantCounts[i][j][2] == 0)
+				sdStats[i][j].countZero++;
 
 			// Store sample for KL divergence computation
 			sdStats[i][j].samples.push_back(m);
-
-			// Update count near zero
-			if (m < SD_NEAR_ZERO_THRESHOLD) {
-				sdStats[i][j].countNearZero++;
-			}
-
-			// Update kernel sum for density estimation at zero
-			// Using Gaussian kernel: exp(-m^2 / (2*h^2))
-			double h2 = bandwidth * bandwidth;
-			sdStats[i][j].kernelSum += exp(-m * m / (2.0 * h2));
 		}
 	}
 }
@@ -3885,13 +3883,12 @@ double computeKDEatPoint(double x, const std::vector<double> &samples, double ba
 	return density / (N * h * SQRT_2PI);
 }
 
-// Compute KL divergence using numerical integration with KDE posterior and uniform prior
-// KL(posterior || prior) = integral of p(m|D) * log(p(m|D) / 3) dm over [0, 1/3]
-double computeKLDivergence(const std::vector<double> &samples, double bandwidth)
+// Compute KL divergence using numerical integration with KDE posterior and the
+// marginal prior of m_ij, 3(K-1)(1-3m)^(K-2) on [0, 1/3] (see above)
+double computeKLDivergence(const std::vector<double> &samples, double bandwidth, unsigned int noPopln)
 {
 	const int N_GRID = 1000;  // Number of grid points
 	const double UPPER_BOUND = 1.0 / 3.0;  // Upper limit of support
-	const double PRIOR_DENSITY = 3.0;  // Uniform(0, 1/3) has density = 3
 	const double DENSITY_FLOOR = 1e-10;  // Minimum density to avoid log(0)
 	const double LOG2E = 1.4426950408889634;  // log2(e) for conversion to bits
 
@@ -3904,8 +3901,8 @@ double computeKLDivergence(const std::vector<double> &samples, double bandwidth)
 
 		if (pPost > DENSITY_FLOOR) {
 			// KL integrand: p(m|D) * log(p(m|D) / p(m))
-			// where p(m) = 3 for uniform prior on [0, 1/3]
-			klNats += pPost * log(pPost / PRIOR_DENSITY) * deltaM;
+			double prior = 3.0 * (noPopln - 1.0) * pow(1.0 - 3.0 * m, noPopln - 2.0);
+			klNats += pPost * log(pPost / prior) * deltaM;
 		}
 	}
 
@@ -3915,18 +3912,28 @@ double computeKLDivergence(const std::vector<double> &samples, double bandwidth)
 }
 
 // Compute and output Savage-Dickey Bayes factors
-void computeSavageDickeyBayesFactors(SavageDickeyStats **sdStats, unsigned int noPopln,
-                                      double priorDensityAtZero, std::ostream &out,
+void computeSavageDickeyBayesFactors(SavageDickeyStats **sdStats, long int ***migrantCounts,
+                                      unsigned int noPopln, std::ostream &out,
                                       const std::vector<std::string> &poplnNames)
 {
-	const double PI = 3.14159265358979323846;
+	const double K = noPopln;
+	double maxBFlo = INFINITY, maxBFhi = 0.0;
 
 	out << "\n\n Savage-Dickey Density Ratio Test for Zero Migration:\n";
 	out << " (Tests H0: m_ij = 0 vs H1: m_ij > 0)\n\n";
-	out << " Source  Dest     Mean(SD)       BF_01  log10(BF)  KL(bits)  Interpretation\n";
-	out << " ---------------------------------------------------------------------------\n";
+	out << " Source  Dest     Mean(SD)  Pr(c=0)       BF_01  log10(BF)  KL(bits)  Interpretation\n";
+	out << " -------------------------------------------------------------------------------------\n";
 
 	for (unsigned int i = 0; i < noPopln; i++) {
+		// individuals sampled in pop i (the ancestry counts of row i sum to it)
+		long int ni = 0;
+		for (unsigned int j = 0; j < noPopln; j++)
+			for (unsigned int age = 0; age < 3; age++)
+				ni += migrantCounts[i][j][age];
+		double scale = (ni + K - 1.0) / (K - 1.0);  // largest attainable BF_01
+		if (scale < maxBFlo) maxBFlo = scale;
+		if (scale > maxBFhi) maxBFhi = scale;
+
 		for (unsigned int j = 0; j < noPopln; j++) {
 			if (i == j) continue;  // Skip diagonal
 
@@ -3941,31 +3948,18 @@ void computeSavageDickeyBayesFactors(SavageDickeyStats **sdStats, unsigned int n
 			double var = (sdStats[i][j].sumM2 / N) - (mean * mean);
 			double sd = sqrt(var > 0 ? var : 0);
 
-			// Compute optimal bandwidth using Silverman's rule
+			// Rao-Blackwellized BF_01 (see above). If no sample had c_ij = 0,
+			// report the upper bound from one such sample.
+			double p0 = (double)sdStats[i][j].countZero / N;
+			bool bound = (sdStats[i][j].countZero == 0);
+			double BF01 = (bound ? 1.0 / N : p0) * scale;
+			double log10BF = log10(BF01);
+
+			// KL divergence (information gain) by numerical integration of a
+			// reflected KDE of the posterior against the exact prior
 			double bandwidth = 1.06 * sd * pow((double)N, -0.2);
 			if (bandwidth < 1e-6) bandwidth = 0.01;  // Minimum bandwidth
-
-			// Compute posterior density at zero using reflection method
-			// p(0|D) = 2 * (1/(N*h*sqrt(2*pi))) * sum(K(m_i/h))
-			double postDensityAtZero = 2.0 * sdStats[i][j].kernelSum / (N * bandwidth * sqrt(2.0 * PI));
-
-			// Alternative: histogram-based estimate
-			double histDensity = (double)sdStats[i][j].countNearZero / (N * SD_NEAR_ZERO_THRESHOLD);
-
-			// Use the KDE estimate (more accurate for smooth distributions)
-			// but check against histogram for sanity
-			if (postDensityAtZero < 0.01 * histDensity || postDensityAtZero > 100 * histDensity) {
-				// Large discrepancy - use histogram estimate as fallback
-				postDensityAtZero = histDensity;
-			}
-
-			// Compute Bayes factor
-			double BF01 = postDensityAtZero / priorDensityAtZero;
-			double log10BF = log10(BF01 > 0 ? BF01 : 1e-10);
-
-			// Compute KL divergence using numerical integration
-			// KL(posterior || prior) with exact uniform prior and KDE posterior
-			double klBits = computeKLDivergence(sdStats[i][j].samples, bandwidth);
+			double klBits = computeKLDivergence(sdStats[i][j].samples, bandwidth, noPopln);
 
 			// Interpretation
 			std::string interp;
@@ -3977,22 +3971,33 @@ void computeSavageDickeyBayesFactors(SavageDickeyStats **sdStats, unsigned int n
 			else if (log10BF > -1) interp = "Substantial for H1";
 			else if (log10BF > -2) interp = "Strong for H1";
 			else interp = "Decisive for H1";
+			if (bound && log10BF > -2) interp += " or more";
 
 			// Format Mean(SD) string with 2 decimal places
-			std::ostringstream meanStr;
+			std::ostringstream meanStr, bfStr, lbfStr;
 			meanStr << std::fixed << std::setprecision(2) << mean << "(" << std::setprecision(2) << sd << ")";
+			bfStr << (bound ? "<" : "") << std::setprecision(3) << BF01;
+			lbfStr << (bound ? "<" : "") << std::fixed << std::setprecision(2) << std::showpos << log10BF;
 
 			out << "  [" << std::setw(2) << j << "]  [" << std::setw(2) << i << "]  ";
 			out << std::right << std::setw(12) << meanStr.str();
-			out << std::fixed << std::setw(10) << std::setprecision(2) << BF01;
-			out << std::setw(9) << std::setprecision(2) << std::showpos << log10BF << std::noshowpos;
-			out << std::setw(9) << std::setprecision(2) << klBits;
+			out << std::fixed << std::setw(9) << std::setprecision(4) << p0;
+			out << std::setw(12) << bfStr.str();
+			out << std::setw(11) << lbfStr.str();
+			out << std::setw(10) << std::setprecision(2) << klBits;
 			out << "  " << interp << "\n";
 		}
 	}
 
-	out << " ---------------------------------------------------------------------------\n";
-	out << " Note: BF_01 > 1 supports H0 (no migration); BF_01 < 1 supports H1 (migration)\n";
+	out << " -------------------------------------------------------------------------------------\n";
+	out << " Pr(c=0) = posterior probability that no sampled individual is a migrant on the route\n";
+	out << " BF_01 = Pr(c=0) (n_i+K-1)/(K-1), n_i = individuals sampled in the destination, K = populations\n";
+	out << " BF_01 > 1 supports H0 (no migration); BF_01 < 1 supports H1 (migration)\n";
+	out << " <x: no sampled state had c=0; x is the bound from one such state\n";
+	out << " BF_01 cannot exceed (n_i+K-1)/(K-1) (here " << std::fixed << std::setprecision(1)
+	    << maxBFlo << (maxBFhi > maxBFlo ? " to " : "");
+	if (maxBFhi > maxBFlo) out << maxBFhi;
+	out << "): evidence for H0 grows with n_i, not with the number of loci\n";
 	out << " KL(bits) = information gain from prior to posterior\n";
 }
 

@@ -148,9 +148,10 @@ Auto-tuning during burn-in adjusts delta values to achieve target acceptance rat
 Tests H₀: m[i][j] = 0 (no migration) vs H₁: m[i][j] > 0
 
 Output includes:
-- Bayes factors with Jeffreys scale interpretation
-- Kullback-Leibler divergence
-- Prior and posterior density estimates at zero
+- Pr(c=0): posterior probability of no sampled migrant on the route
+- Bayes factors BF_01 = Pr(c=0) (n_i+K-1)/(K-1) (exact, Rao-Blackwellized;
+  replaced the kernel estimate of 3.4.0-3.5.0), Jeffreys scale interpretation
+- Kullback-Leibler divergence (KDE posterior against the exact prior 3(K-1)(1-3m)^(K-2))
 
 ## Testing
 

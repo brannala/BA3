@@ -24,6 +24,14 @@
 \maketitle
 
 \begin{abstract}
+\textbf{Superseded.} This note describes the kernel-density estimator used in
+BA3 3.4.0--3.5.0, which is incorrect: the prior of $m_{ij}$ is not
+Uniform$(0,\frac13)$ but $3\,\mathrm{Beta}(1,K-1)$ (a flat Dirichlet on $3m$ over
+$K$ categories), with density $3(K-1)$ at zero, and the kernel sum was normalized
+with a different bandwidth from the one used to accumulate it. BA3 now computes
+$BF_{01} = \Pr(c_{ij}=0 \mid \text{data})\,(n_i+K-1)/(K-1)$ exactly; see the
+comment above \texttt{initSavageDickeyStats} in \texttt{src/main.cpp} and the manual.
+
 This document provides a detailed mathematical description of the Savage-Dickey density ratio test and Kullback-Leibler divergence statistics as implemented in BA3 (BayesAss Edition 3) for testing hypotheses about migration rates between populations. We describe the theoretical foundations, computational methods including kernel density estimation with boundary correction, and the interpretation of results.
 \end{abstract}
 

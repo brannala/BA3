@@ -413,28 +413,53 @@ are migrants derived from population j (per generation).
 
 #### Savage-Dickey Density Ratio Test
 
-BA3 now includes a formal test for zero migration between populations:
+BA3 tests for zero migration on each route (example: `examples/3pop.txt`):
 ```
  Savage-Dickey Density Ratio Test for Zero Migration:
  (Tests H0: m_ij = 0 vs H1: m_ij > 0)
 
- Source  Dest     Mean(SD)       BF_01  log10(BF)  KL(bits)  Interpretation
- ---------------------------------------------------------------------------
-  [ 1]  [ 0]    0.01(0.01)     47.12    +1.67     2.80  Strong for H0
-  [ 2]  [ 0]    0.02(0.02)     36.59    +1.56     2.46  Strong for H0
+ Source  Dest     Mean(SD)  Pr(c=0)       BF_01  log10(BF)  KL(bits)  Interpretation
+ -------------------------------------------------------------------------------------
+  [ 1]  [ 0]    0.01(0.01)   0.1885        9.61      +0.98      2.38  Substantial for H0
+  [ 2]  [ 0]    0.01(0.01)   0.0467        2.38      +0.38      2.36  Weak for H0
+  [ 0]  [ 1]    0.09(0.01)   0.0000     <0.0126     <-1.90      1.96  Strong for H1 or more
   ...
- ---------------------------------------------------------------------------
- Note: BF_01 > 1 supports H0 (no migration); BF_01 < 1 supports H1 (migration)
- KL(bits) = information gain from prior to posterior
+ -------------------------------------------------------------------------------------
 ```
 
 The columns are:
 - **Source/Dest**: Population indices for the migration rate being tested
 - **Mean(SD)**: Posterior mean and standard deviation of the migration rate
-- **BF_01**: Bayes factor comparing H0 (no migration) vs H1 (migration present)
+- **Pr(c=0)**: Posterior probability that no sampled individual in the destination
+  is a first- or second-generation migrant from the source
+- **BF_01**: Bayes factor for H0 (no migration) against H1 (migration present)
 - **log10(BF)**: Log10 of the Bayes factor
 - **KL(bits)**: Kullback-Leibler information gain from prior to posterior
 - **Interpretation**: Based on Jeffreys' scale (Weak, Substantial, Strong, Decisive)
+
+The Bayes factor is computed exactly (up to Monte Carlo error). The prior on the
+migration rates into population i is flat, so u = 3m has a Dirichlet(1,...,1)
+prior over the K populations, and the posterior density of m_ij at zero, given
+the ancestry of the sampled individuals, is nonzero only when none of them is a
+migrant from j. This gives
+
+BF_01 = Pr(c=0) (n_i + K - 1)/(K - 1),
+
+where n_i is the number of individuals sampled in the destination. When no
+sampled state has c=0, BF_01 is reported as an upper bound (`<`), so the
+evidence for migration is at least as strong as stated.
+
+The evidence for H0 is limited: BF_01 cannot exceed (n_i + K - 1)/(K - 1),
+however many loci are typed. With 50 individuals and 10 populations the maximum
+is about 6.6. Absence of migration can only be supported by sampling more
+individuals in the recipient population, whereas a single clearly identified
+migrant can give decisive evidence for migration.
+
+Versions 3.4.0 to 3.5.0 estimated the posterior density at zero with a kernel
+density estimate that used inconsistent bandwidths, and divided by a prior
+density of 3 instead of 3(K-1). They overstated BF_01 for H0, by a factor of
+about 30 with 10 populations, and their "Decisive for H0" results should not be
+relied on.
 
 #### Inbreeding Coefficients
 ```
