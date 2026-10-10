@@ -9,15 +9,19 @@ value:  z = (mean over seeds - exact) / sqrt(SE^2 + floor^2), where SE is the
 between-seed standard error and floor absorbs the printed rounding. A group fails
 if any |z| > 4 or more than 2% of its |z| exceed 3.
 
+With --hier the reference is tests/exact_posterior_hier.py (hierarchical
+allele-frequency prior) and theta is compared too; give the builds -H.
+
 usage: tests/check_exact.py LABEL=BINARY[:FLAGS] ... [--seeds R] [--iters N]
-                            [--jobs J] [--only NAME,...]
+                            [--jobs J] [--only NAME,...] [--hier]
   e.g. tests/check_exact.py master=/tmp/ref/BA3 new=./BA3 collapse=./BA3:-c
+       tests/check_exact.py --hier hier=./BA3:"-c -H"
 """
 import argparse, glob, json, math, os, re, shutil, subprocess, sys, tempfile
 from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-FLOOR = {"m": 5e-5, "F": 5e-5, "freq": 5e-6, "anc": 5e-4}
+FLOOR = {"m": 5e-5, "F": 5e-5, "theta": 5e-5, "freq": 5e-6, "anc": 5e-4}
 
 
 def parse(d):
@@ -34,8 +38,12 @@ def parse(d):
         for j, (m, s) in enumerate(re.findall(r"([0-9.]+)\(([0-9.]+)\)", mm.group(2))):
             if str(j) != i:
                 out[f"m[{labels[i]}][{labels[str(j)]}]"] = (float(m), float(s))
-    for q, name, m, s in re.findall(r"\[\s*(\d+)\]\s+(\S+)\s+([0-9.]+)\(([0-9.]+)\)", txt.split("Inbreeding Coefficients")[1]):
+    for q, name, m, s in re.findall(r"\[\s*(\d+)\]\s+(\S+)\s+([0-9.]+)\(([0-9.]+)\)",
+                                     txt.split("Inbreeding Coefficients")[1].split("Drift from Ancestral")[0]):
         out[f"F[{name}]"] = (float(m), float(s))
+    if "Drift from Ancestral" in txt:
+        for q, name, m, s in re.findall(r"\[\s*(\d+)\]\s+(\S+)\s+([0-9.]+)\(([0-9.]+)\)", txt.split("Drift from Ancestral")[1]):
+            out[f"theta[{name}]"] = (float(m), float(s))
     with open(os.path.join(d, "freq.txt")) as f:
         next(f)
         for line in f:
@@ -73,6 +81,7 @@ def main():
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--only", default="")
     ap.add_argument("--python", default=sys.executable, help="python with numpy for the enumerator")
+    ap.add_argument("--hier", action="store_true", help="hierarchical-prior reference (builds need -H)")
     a = ap.parse_args()
     builds = []
     for b in a.builds:
@@ -88,7 +97,8 @@ def main():
             if only and name not in only:
                 continue
             ej = os.path.join(work, name + ".json")
-            subprocess.run([a.python, os.path.join(HERE, "exact_posterior.py"), data, "--json", ej],
+            enumerator = "exact_posterior_hier.py" if a.hier else "exact_posterior.py"
+            subprocess.run([a.python, os.path.join(HERE, enumerator), data, "--json", ej],
                            check=True, stdout=subprocess.DEVNULL)
             exact = {k: tuple(v) for k, v in json.load(open(ej))["post"].items()}
             with ThreadPoolExecutor(a.jobs) as ex:

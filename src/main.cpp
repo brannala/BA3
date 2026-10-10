@@ -45,6 +45,7 @@ struct globalArgs {
 	int nolikelihood;
 	int autotune;
 	int collapse;            // integrate out allele frequencies (collapsed sampler); default off
+	int hier;                // hierarchical (F-model) allele-frequency prior; default off
 	int useVCF;              // Use VCF input format
 	char vcfFileName[256];   // VCF file path
 	char metaFileName[256];  // Metadata file path (INDIV POPLN)
@@ -52,7 +53,7 @@ struct globalArgs {
 	char freqFileName[256];  // Allele frequencies file path
 } gArgs;
 
-static const char *optString = "s:i:n:b:o:m:a:f:V:M:F:cvugtdphTN?";
+static const char *optString = "s:i:n:b:o:m:a:f:V:M:F:cHvugtdphTN?";
 
 static const struct option longOpts[] = {
 	{ "seed", required_argument, NULL, 's' },
@@ -76,6 +77,7 @@ static const struct option longOpts[] = {
 	{ "autotune", no_argument, NULL, 'T'},
 	{ "noautotune", no_argument, NULL, 'N'},
 	{ "collapse", no_argument, NULL, 'c'},
+	{ "hier", no_argument, NULL, 'H'},
 	{ NULL, no_argument, NULL, 0 }
 };
 
@@ -159,6 +161,12 @@ const double AUTOTUNE_DELTA_MAX = 0.99;        // maximum delta value
 const double ALLELE_PRIOR_ALPHA = 1.0;
 // Collapsed sampler: iterations between draws of F from its full-conditional.
 const unsigned int F_DRAW_INTERVAL = 10;
+// --hier: each locus's ancestral frequencies are refreshed about once every
+// HIER_PI_SWEEPS sweeps (noIndiv iterations), and each population's theta about
+// once every HIER_THETA_SWEEPS sweeps. Both are well determined and move slowly,
+// and their updates cost O(P A) per locus and O(L A) per population.
+const unsigned int HIER_PI_SWEEPS = 4;
+const unsigned int HIER_THETA_SWEEPS = 2;
 
 // Fast whitespace-based string splitting (replaces slow regex version)
 std::vector<std::string> split(const std::string& str,
@@ -487,6 +495,25 @@ static void initCountsNative(long ***cnt, long **cntN, indiv *ind, unsigned int 
 	}
 }
 
+// Hierarchical (F-model) allele-frequency prior (--hier). Population
+// frequencies are Dirichlet(c_p * pi_l) around shared ancestral frequencies
+// pi_l ~ Dirichlet(1), with c_p = (1 - theta_p) / theta_p and theta_p ~ U(0,1).
+// The Dirichlet-multinomial predictive keeps its form with alpha_pla = c_p pi_la
+// in place of the flat alpha, and pi and theta are sampled (MH). Without --hier
+// gHier is false and every alpha is ALLELE_PRIOR_ALPHA, as before.
+static bool gHier = false;
+static double **gPi = nullptr;          // gPi[l][a], ancestral frequencies
+static double *gTheta = nullptr;        // gTheta[p], drift
+static double *gHierC = nullptr;        // gHierC[p] = (1 - theta_p) / theta_p
+static double gPiSD = 0.5, gThetaSD = 0.3;          // MH step sizes (autotuned)
+static long gPiAcc = 0, gPiTry = 0, gThetaAcc = 0, gThetaTry = 0;
+
+// Dirichlet parameter of allele a at (p,l), and the sum over alleles.
+static inline double prAlpha(unsigned int p, unsigned int l, int a, double alpha)
+{ return gHier ? gHierC[p] * gPi[l][a] : alpha; }
+static inline double prAlphaSum(unsigned int p, unsigned int A, double alpha)
+{ return gHier ? gHierC[p] : A * alpha; }
+
 // Dirichlet-multinomial (Polya) log-marginal of the gene-copy counts, integrating
 // out the population allele frequencies under a symmetric Dirichlet(alpha) prior.
 static double collapsedLogLik(long ***cnt, long **cntN, unsigned int noPopln,
@@ -499,9 +526,13 @@ static double collapsedLogLik(long ***cnt, long **cntN, unsigned int noPopln,
 			unsigned int A = noAlleles[l];
 			if (A == 0) continue;
 			long N = cntN[p][l];
-			lp += lgamma(A * alpha) - lgamma(A * alpha + (double) N);
+			double S = prAlphaSum(p, A, alpha);
+			lp += lgamma(S) - lgamma(S + (double) N);
 			for (unsigned int a = 0; a < A; a++)
-				lp += lgamma(alpha + (double) cnt[p][l][a]) - lgamma(alpha);
+			{
+				double al = prAlpha(p, l, a, alpha);
+				lp += lgamma(al + (double) cnt[p][l][a]) - lgamma(al);
+			}
 		}
 	return lp;
 }
@@ -511,7 +542,7 @@ static double collapsedLogLik(long ***cnt, long **cntN, unsigned int noPopln,
 static inline double addRatio(long ***cnt, long **cntN, unsigned int p,
                               unsigned int l, int a, unsigned int A, double alpha)
 {
-	return (cnt[p][l][a] + alpha) / (cntN[p][l] + A * alpha);
+	return (cnt[p][l][a] + prAlpha(p, l, a, alpha)) / (cntN[p][l] + prAlphaSum(p, A, alpha));
 }
 static inline void addCopy(long ***cnt, long **cntN, unsigned int p, unsigned int l, int a)
 { cnt[p][l][a]++; cntN[p][l]++; }
@@ -603,6 +634,56 @@ static inline double logGenoPredT(long ***cnt, long **cntN, unsigned int p, unsi
 	              + gLogTab[cnt[p][l][a1] + 1] - gLogTab[N + 1 + A];
 }
 
+// --hier version of computeAddLogProb. The Dirichlet parameters are not 1, so
+// the integer log tables do not apply; instead the per-locus predictive factors
+// are multiplied together and the product is logged only every 8 loci (or
+// sooner if it gets small), one log per 8 loci instead of one or two per locus.
+static double computeAddLogProbH(long ***cnt, long **cntN, const indiv& ind,
+                                 unsigned int noLoci, unsigned int *noAlleles, double alpha,
+                                 double *FStat)
+{
+	const GenotypeType (*g)[2] = ind.genotype;
+	double dl = 0.0, prod = 1.0;
+	unsigned int since = 0;
+	bool age2 = (ind.migrantAge == 2);
+	unsigned int p = copyPop(ind), mig = ind.migrantPopln, nat = ind.samplePopln;
+	double F = FStat[p], G = 1.0 - F;
+	for (unsigned int l = 0; l < noLoci; l++)
+	{
+		unsigned int A = noAlleles[l]; if (A == 0) continue;
+		int a0 = g[l][0], a1 = g[l][1];
+		if (a0 < 0) continue;                              // missing genotype
+		double v;
+		if (!age2)    // both copies from p, IBD marginalised
+		{
+			double D = cntN[p][l] + prAlphaSum(p, A, alpha);
+			double n0 = cnt[p][l][a0] + prAlpha(p, l, a0, alpha);
+			if (a0 == a1)
+				v = n0 / D * (F + G * (n0 + 1.0) / (D + 1.0));
+			else
+				v = G * n0 * (cnt[p][l][a1] + prAlpha(p, l, a1, alpha)) / (D * (D + 1.0));
+		}
+		else          // one copy from mig, one from nat (distinct cells); phase marginal
+		{
+			double invM = 1.0 / (cntN[mig][l] + prAlphaSum(mig, A, alpha));
+			double invN = 1.0 / (cntN[nat][l] + prAlphaSum(nat, A, alpha));
+			double m0 = cnt[mig][l][a0] + prAlpha(mig, l, a0, alpha);
+			double t0 = cnt[nat][l][a0] + prAlpha(nat, l, a0, alpha);
+			if (a0 == a1)
+				v = m0 * t0 * invM * invN;
+			else
+			{
+				double m1 = cnt[mig][l][a1] + prAlpha(mig, l, a1, alpha);
+				double t1 = cnt[nat][l][a1] + prAlpha(nat, l, a1, alpha);
+				v = 0.5 * (m0 * t1 + m1 * t0) * invM * invN;
+			}
+		}
+		prod *= v;
+		if (++since == 8 || prod < 1e-100) { dl += log(prod); prod = 1.0; since = 0; }
+	}
+	return dl + log(prod);
+}
+
 // Change in the collapsed log-marginal from ADDING individual ind's gene copies
 // under its ancestry, given the current (without-ind) counts. Read-only. Age 0/1
 // marginalizes the IBD indicator (inbreeding F); age 2 marginalizes the latent
@@ -611,6 +692,7 @@ static double computeAddLogProb(long ***cnt, long **cntN, const indiv& ind,
                                 unsigned int noLoci, unsigned int *noAlleles, double alpha,
                                 double *FStat)
 {
+	if (gHier) return computeAddLogProbH(cnt, cntN, ind, noLoci, noAlleles, alpha, FStat);
 	const GenotypeType (*g)[2] = ind.genotype;
 	double dl = 0.0;
 	if (ind.migrantAge != 2)
@@ -675,7 +757,7 @@ static void addIndividual(long ***cnt, long **cntN, const indiv& ind, unsigned c
 			if (a0 == a1)   // homozygote: sample the IBD indicator
 			{
 				double rr  = addRatio(cnt, cntN, p, l, a0, A, alpha);
-				double rr2 = (cnt[p][l][a0] + 1 + alpha) / (cntN[p][l] + 1 + A * alpha);
+				double rr2 = (cnt[p][l][a0] + 1 + prAlpha(p, l, a0, alpha)) / (cntN[p][l] + 1 + prAlphaSum(p, A, alpha));
 				double pz1 = F * rr, pz0 = (1.0 - F) * rr * rr2;
 				if (gsl_rng_uniform(r) < pz1 / (pz1 + pz0))
 				{ addCopy(cnt, cntN, p, l, a0); assign[l] = 1; gZSum[p]++; }      // IBD: one copy
@@ -777,8 +859,8 @@ static void resampleIBD(long ***cnt, long **cntN, const indiv& ind, unsigned cha
 		removeCopy(cnt, cntN, p, l, a0);
 		if (assign[l] != 1) removeCopy(cnt, cntN, p, l, a0);
 		else gZSum[p]--;
-		double rr  = (cnt[p][l][a0] + alpha) / (cntN[p][l] + A * alpha);
-		double rr2 = (cnt[p][l][a0] + 1 + alpha) / (cntN[p][l] + 1 + A * alpha);
+		double rr  = addRatio(cnt, cntN, p, l, a0, A, alpha);
+		double rr2 = (cnt[p][l][a0] + 1 + prAlpha(p, l, a0, alpha)) / (cntN[p][l] + 1 + prAlphaSum(p, A, alpha));
 		double pz1 = F * rr, pz0 = (1.0 - F) * rr * rr2;
 		if (gsl_rng_uniform(r) < pz1 / (pz1 + pz0))
 		{ addCopy(cnt, cntN, p, l, a0); assign[l] = 1; gZSum[p]++; }
@@ -793,6 +875,122 @@ static void drawF(unsigned int noPopln, double *FStat)
 {
 	for (unsigned int p = 0; p < noPopln; p++)
 		FStat[p] = gsl_ran_beta(r, 1.0 + (double) gZSum[p], 1.0 + (double)(gZTrials[p] - gZSum[p]));
+}
+
+// lgamma(x + n) - lgamma(x) for an integer count n >= 0: for small n the log of
+// the rising product x (x+1) ... (x+n-1), one log instead of two lgamma calls.
+static inline double lgammaRatio(double x, long n)
+{
+	if (n <= 0) return 0.0;
+	if (n <= 24)
+	{
+		double p = x;
+		for (long k = 1; k < n; k++) p *= x + k;
+		return log(p);
+	}
+	return lgamma(x + n) - lgamma(x);
+}
+
+// --hier: log Dirichlet-multinomial marginal of locus l's counts in every
+// population, given ancestral frequencies pi (length A) and the current c_p.
+static double hierLocusLogLik(long ***cnt, long **cntN, unsigned int l, unsigned int A,
+                              const double *pi, unsigned int noPopln)
+{
+	double lp = 0.0;
+	for (unsigned int p = 0; p < noPopln; p++)
+	{
+		double c = gHierC[p];
+		lp -= lgammaRatio(c, cntN[p][l]);
+		for (unsigned int a = 0; a < A; a++)
+			lp += lgammaRatio(c * pi[a], cnt[p][l][a]);
+	}
+	return lp;
+}
+
+// --hier: the same marginal for population p over all loci, with c in place of
+// c_p (for the theta update). O(noLoci * A).
+static double hierPopLogLik(long ***cnt, long **cntN, unsigned int p, double c,
+                            unsigned int noLoci, unsigned int *noAlleles)
+{
+	double lp = 0.0;
+	for (unsigned int l = 0; l < noLoci; l++)
+	{
+		unsigned int A = noAlleles[l];
+		if (A < 2) continue;                 // a monomorphic locus contributes 0
+		lp -= lgammaRatio(c, cntN[p][l]);
+		for (unsigned int a = 0; a < A; a++)
+			lp += lgammaRatio(c * gPi[l][a], cnt[p][l][a]);
+	}
+	return lp;
+}
+
+// --hier: MH update of pi_l, a random walk in additive-log-ratio coordinates
+// y_a = log(pi_a / pi_{A-1}). The flat Dirichlet(1) prior on pi has density
+// prod_a pi_a in these coordinates, which enters the acceptance ratio. O(P * A).
+static void updatePi(long ***cnt, long **cntN, unsigned int l, unsigned int A, unsigned int noPopln)
+{
+	if (A < 2) return;
+	double *pi = gPi[l];
+	double y[MAXALLELE], prop[MAXALLELE], mx = 0.0, sum = 0.0;
+	for (unsigned int a = 0; a + 1 < A; a++)
+	{
+		y[a] = log(pi[a] / pi[A - 1]) + gsl_ran_gaussian(r, gPiSD);
+		if (y[a] > mx) mx = y[a];
+	}
+	y[A - 1] = 0.0;
+	for (unsigned int a = 0; a < A; a++) { prop[a] = exp(y[a] - mx); sum += prop[a]; }
+	gPiTry++;
+	for (unsigned int a = 0; a < A; a++)
+	{
+		prop[a] /= sum;
+		if (!(prop[a] > 1e-300)) return;     // underflow: reject
+	}
+	double lr = hierLocusLogLik(cnt, cntN, l, A, prop, noPopln)
+	          - hierLocusLogLik(cnt, cntN, l, A, pi, noPopln);
+	for (unsigned int a = 0; a < A; a++) lr += log(prop[a]) - log(pi[a]);
+	if (log(gsl_rng_uniform_pos(r)) < lr)
+	{
+		for (unsigned int a = 0; a < A; a++) pi[a] = prop[a];
+		gPiAcc++;
+	}
+}
+
+// --hier: MH update of theta_p, a random walk on logit(theta_p). The uniform
+// prior on theta has density theta(1-theta) on the logit scale. O(noLoci * A).
+static void updateTheta(long ***cnt, long **cntN, unsigned int p,
+                        unsigned int noLoci, unsigned int *noAlleles)
+{
+	double th = gTheta[p];
+	double tp = 1.0 / (1.0 + exp(-(log(th / (1.0 - th)) + gsl_ran_gaussian(r, gThetaSD))));
+	gThetaTry++;
+	if (!(tp > 1e-9 && tp < 1.0 - 1e-9)) return;
+	double cp = (1.0 - tp) / tp;
+	double lr = hierPopLogLik(cnt, cntN, p, cp, noLoci, noAlleles)
+	          - hierPopLogLik(cnt, cntN, p, gHierC[p], noLoci, noAlleles)
+	          + log(tp * (1.0 - tp)) - log(th * (1.0 - th));
+	if (log(gsl_rng_uniform_pos(r)) < lr)
+	{
+		gTheta[p] = tp;
+		gHierC[p] = cp;
+		gThetaAcc++;
+	}
+}
+
+// --hier: during burn-in, scale the pi and theta step sizes toward an
+// acceptance rate of 0.2-0.4.
+static void tuneHier()
+{
+	if (gPiTry > 0)
+	{
+		double rate = (double) gPiAcc / gPiTry;
+		if (rate > 0.4) gPiSD *= 1.2; else if (rate < 0.2) gPiSD /= 1.2;
+	}
+	if (gThetaTry > 0)
+	{
+		double rate = (double) gThetaAcc / gThetaTry;
+		if (rate > 0.4) gThetaSD *= 1.2; else if (rate < 0.2) gThetaSD /= 1.2;
+	}
+	gPiAcc = gPiTry = gThetaAcc = gThetaTry = 0;
 }
 
 // Moment estimate F = 1 - Hobs/Hexp per sampled population, used only to start
@@ -861,6 +1059,7 @@ int main( int argc, char *argv[] )
 	gArgs.nolikelihood=0;
 	gArgs.autotune = 1;  // autotune enabled by default
 	gArgs.collapse = 0;  // collapsed (integrated-frequency) sampler off by default
+	gArgs.hier = 0;      // hierarchical allele-frequency prior off by default
 	gArgs.usingOutfile = 1;
 	gArgs.useVCF = 0;
 	gArgs.vcfFileName[0] = '\0';
@@ -942,6 +1141,10 @@ int main( int argc, char *argv[] )
 				gArgs.collapse = 1;
 				break;
 
+			case 'H':
+				gArgs.hier = 1;
+				break;
+
 			case 'V':
 				strncpy(gArgs.vcfFileName, optarg, sizeof(gArgs.vcfFileName) - 1);
 				gArgs.vcfFileName[sizeof(gArgs.vcfFileName) - 1] = '\0';
@@ -975,6 +1178,8 @@ int main( int argc, char *argv[] )
 				std::cout << "    -T, --autotune    auto-tune mixing parameters during burn-in (default)\n";
 				std::cout << "    -N, --noautotune  disable auto-tuning of mixing parameters\n";
 				std::cout << "    -c, --collapse    integrate out allele frequencies (collapsed sampler; faster)\n";
+				std::cout << "    -H, --hier        hierarchical allele-frequency prior: shared ancestral\n";
+				std::cout << "                      frequencies and per-population drift theta (requires -c)\n";
 				exit(0);
 
 			case '?':
@@ -987,6 +1192,11 @@ int main( int argc, char *argv[] )
 		}
 
 		opt = getopt_long( argc, argv, optString, longOpts, &longIndex );
+	}
+
+	if (gArgs.hier && !gArgs.collapse) {
+		std::cerr << "error: the hierarchical prior (-H) currently requires the collapsed sampler (-c)\n";
+		exit(1);
 	}
 
 	/* get input file name or validate VCF options */
@@ -1313,6 +1523,8 @@ common_processing:
 	double *FStat = new double[noPopln];
 	double *avgFStat = new double[noPopln];
 	double *varFStat = new double[noPopln];
+	double *avgTheta = new double[noPopln];
+	double *varTheta = new double[noPopln];
 	// Pre-computed log values for FStat optimization
 	double *logFStat = new double[noPopln];
 	double *log1MinusFStat = new double[noPopln];
@@ -1321,6 +1533,8 @@ common_processing:
 		FStat[i]=0.0;
 		avgFStat[i]=0.0;
 		varFStat[i]=0.0;
+		avgTheta[i]=0.0;
+		varTheta[i]=0.0;
 		logFStat[i] = log(1e-10);  // log(0) approximation for initial FStat=0
 		log1MinusFStat[i] = log(1.0);  // log(1-0) = 0
 	}
@@ -1434,6 +1648,31 @@ common_processing:
 		// [0, 2*noIndiv + maxAlleles + 1]; +3 slack on each dimension.
 		initHomLog(noPopln, 2L * (long)noIndiv + 3, 2L * (long)noIndiv + (long)maxAlleles + 3);
 		initCountsNative(gCount, gCountN, sampleIndiv, noIndiv, noLoci, noAlleles, noPopln);
+		// --hier: start pi_l at the pooled sample frequencies (plus 1/2 per allele,
+		// so no allele starts at 0) and every theta_p at 0.1.
+		if (gArgs.hier)
+		{
+			gHier = true;
+			gPi = new double*[noLoci];
+			for (unsigned int l = 0; l < noLoci; l++)
+			{
+				unsigned int A = noAlleles[l] > 0 ? noAlleles[l] : 1;
+				gPi[l] = new double[A];
+				double tot = 0.0;
+				for (unsigned int a = 0; a < A; a++)
+				{
+					long n = 0;
+					if (noAlleles[l] > 0)
+						for (unsigned int p = 0; p < noPopln; p++) n += gCount[p][l][a];
+					gPi[l][a] = n + 0.5;
+					tot += gPi[l][a];
+				}
+				for (unsigned int a = 0; a < A; a++) gPi[l][a] /= tot;
+			}
+			gTheta = new double[noPopln];
+			gHierC = new double[noPopln];
+			for (unsigned int p = 0; p < noPopln; p++) { gTheta[p] = 0.1; gHierC[p] = 9.0; }
+		}
 		gZSum.assign(noPopln, 0); gZTrials.assign(noPopln, 0);
 		for (unsigned int i = 0; i < noIndiv; i++)
 			for (unsigned int l = 0; l < noLoci; l++)
@@ -2003,6 +2242,27 @@ if(gArgs.collapse && !NOLIKELIHOOD && !NOFSTATMCMC)
 	}
 }
 
+// --hier: refresh noLoci / (HIER_PI_SWEEPS noIndiv) ancestral frequencies per
+// iteration on average, and one random population's theta every
+// HIER_THETA_SWEEPS noIndiv / noPopln iterations; tune both step sizes during
+// burn-in.
+if(gHier && !NOLIKELIHOOD)
+{
+	unsigned int piDen = HIER_PI_SWEEPS * noIndiv;
+	unsigned int nPi = noLoci / piDen;
+	if (gsl_rng_uniform(r) < (double)(noLoci % piDen) / piDen) nPi++;
+	for (unsigned int k = 0; k < nPi; k++)
+	{
+		unsigned int l = gsl_rng_uniform_int(r, noLoci);
+		updatePi(gCount, gCountN, l, noAlleles[l], noPopln);
+	}
+	unsigned int thetaInterval = HIER_THETA_SWEEPS * noIndiv / noPopln > 0 ? HIER_THETA_SWEEPS * noIndiv / noPopln : 1;
+	if (i % thetaInterval == 0)
+		updateTheta(gCount, gCountN, gsl_rng_uniform_int(r, noPopln), noLoci, noAlleles);
+	if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && i % 1000 == 0)
+		tuneHier();
+}
+
 if(!NOMISSINGDATA && !gArgs.collapse)
 {
 	/* propose a change to a missing genotype */
@@ -2119,6 +2379,9 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 			for (unsigned int l = 0; l < noPopln; l++)
 				for (unsigned int k = 0; k < noPopln; k++)
 					tracefile << "m[" << l << "][" << k << "]\t";
+			if (gHier)
+				for (unsigned int l = 0; l < noPopln; l++)
+					tracefile << "theta[" << l << "]\t";
 			tracefile << "\n";
 		}
 
@@ -2206,6 +2469,9 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 			for (unsigned int l = 0; l < noPopln; l++)
 				for (unsigned int k = 0; k < noPopln; k++)
 					tracefile << migrationRates[l][k] << "\t" ;
+			if (gHier)
+				for (unsigned int l = 0; l < noPopln; l++)
+					tracefile << gTheta[l] << "\t";
 			tracefile << "\n";
 		}
 
@@ -2244,7 +2510,7 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 					if(gArgs.collapse)
 					{
 						for(unsigned int m = 0; m < noAlleles[k]; m++)
-							dirAlpha[m] = (double)gCount[l][k][m] + ALLELE_PRIOR_ALPHA;
+							dirAlpha[m] = (double)gCount[l][k][m] + prAlpha(l, k, m, ALLELE_PRIOR_ALPHA);
 						gsl_ran_dirichlet(r, noAlleles[k], dirAlpha, dirDraw);
 					}
 					for(unsigned int m = 0; m < noAlleles[k]; m++)
@@ -2268,6 +2534,17 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 				}
 				avgFStat[l] = avgFStat[l]+(FStat[l]-avgFStat[l])/(1.0+iter);
 			}
+
+			if (gHier)
+				for (unsigned int l=0; l < noPopln; l++)
+				{
+					if(iter > 1)
+					{
+						sqrDiffMean=(gTheta[l]-avgTheta[l])*(gTheta[l]-avgTheta[l])/(iter+1.0);
+						varTheta[l] = ((iter-1.0)/iter)*varTheta[l]+sqrDiffMean;
+					}
+					avgTheta[l] = avgTheta[l]+(gTheta[l]-avgTheta[l])/(1.0+iter);
+				}
 
 			for (unsigned int l=0; l < noIndiv; l++)
 			{
@@ -2419,6 +2696,22 @@ mcmcout << "\n Population Labels:\n";
 		mcmcout << " [" << std::setw(2) << l << "]  "
 		        << std::left << std::setw(25) << poplnNames[l]
 		        << std::right << std::setw(14) << fstat.str() << "\n";
+	}
+
+	if (gHier)
+	{
+		mcmcout << "\n Drift from Ancestral Frequencies (hierarchical prior):\n";
+		mcmcout << " Index  Population                 theta(SD)\n";
+		mcmcout << " -----  ----------                 ---------\n";
+		for (unsigned int l = 0; l < noPopln; l++)
+		{
+			std::ostringstream th;
+			th << std::fixed << std::setprecision(4) << avgTheta[l]
+			   << "(" << std::setprecision(4) << sqrt(varTheta[l]) << ")";
+			mcmcout << " [" << std::setw(2) << l << "]  "
+			        << std::left << std::setw(25) << poplnNames[l]
+			        << std::right << std::setw(14) << th.str() << "\n";
+		}
 	}
 
 	// Write allele frequencies to separate file if -F specified
@@ -2663,6 +2956,16 @@ mcmcout << "\n Population Labels:\n";
 	// Free FStat arrays
 	delete[] FStat;
 	delete[] avgFStat;
+	delete[] avgTheta;
+	delete[] varTheta;
+	if (gHier)
+	{
+		for (unsigned int l = 0; l < noLoci; l++) delete[] gPi[l];
+		delete[] gPi; gPi = nullptr;
+		delete[] gTheta; gTheta = nullptr;
+		delete[] gHierC; gHierC = nullptr;
+		gHier = false;
+	}
 	delete[] varFStat;
 
 	// Free Savage-Dickey statistics
