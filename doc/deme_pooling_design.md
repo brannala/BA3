@@ -1,7 +1,8 @@
 # Testing whether sampled populations are one deme: design note
 
-Status: design, 2026-10-10. Branch `hier-prior`. Nothing implemented.
-Plan: section 8 (fixed pair, then any pair, then the full partition model).
+Status: **abandoned, 2026-10-10.** Kept as a record. Users are instead advised
+(manual section 6.5) to merge samples whose migration rates stay near the 1/3
+bound with `-c -H`. Section 9 explains why the approach was dropped.
 
 ## 1. Problem
 
@@ -257,7 +258,40 @@ and by simulation.
 superseded by this approach for pooling questions. Stepping-stone remains
 available for other model comparisons.
 
-## 9. References
+## 9. Outcome
+
+Step 1 was prototyped (Python, not kept) and validated, then abandoned.
+
+- **Exact references.** `exact_posterior.py` and `exact_posterior_hier.py`
+  report log p(G); the exact merge Bayes factor is the evidence of the data
+  with B relabelled as A over the evidence of the original. Normalization was
+  checked by summing over one individual's genotypes.
+- **Merge/split move (sections 3-5).** Exact on tiny data (Pr(merged), log
+  BF and conditional posteriors against the enumerator, flat and `-H`, two and
+  three populations). On realistic data (oversplit pair, 100 individuals,
+  1,000 SNPs) log alpha was about -500 in both directions: in the split
+  posterior of an oversplit pair almost every individual is a second-
+  generation migrant from the other sample, so the reverse move must propose
+  tens of thousands of phases and IBD indicators, and small mismatches add up
+  to hundreds of nats. The same high-dimensional mismatch reappears in any
+  representation: with ancestry summed out (given frequencies) it moves to the
+  L-dimensional frequency difference.
+- **Bridge of single-individual moves.** Each individual sampled at B has a
+  home deme in {A, B}; all-home-B is the split model, all-home-A (deme B empty,
+  costing nothing with collapsed frequencies) is exactly the merged model, so
+  BF = Pr(all home A) / Pr(all home B), with Wang-Landau weights on the number
+  moved. Exact on tiny data (log BF within MC error of the enumerator, flat and
+  `-H`). Dropped because the intermediate models confound home deme with
+  migrant origin: a true first-generation migrant from A into B is better
+  explained as a member of A's deme, so migrants are absorbed, migration rates
+  are reduced and individuals are redistributed between samples.
+
+What remains useful: the oversplit simulation (section 2; congen2026
+`sim/split_pop.py`, `sim/runs_split`), which shows the signature now described
+in the manual: m between the samples at the bound, decisive Bayes factors for
+migration in both directions, and F of one sample at its prior.
+
+## 10. References
 
 - Wright S (1931) Evolution in Mendelian populations. Genetics 16:97-159.
 - Balding DJ, Nichols RA (1995) A method for quantifying differentiation

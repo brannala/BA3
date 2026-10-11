@@ -546,6 +546,28 @@ $\overline{m}_{ij} = \frac{1}{3n} \,\, \mathrm{for} \,\, i \neq j.$
 The KL(bits) column in the Savage-Dickey test output indicates how much information the data
 provides about each migration rate (higher values = more informative data).
 
+### 6.5 Populations that should be merged
+
+BA3 treats each sampled population as a separate population. If two samples come from a
+single randomly mating population (for example, two sampling sites within one population),
+they share one set of allele frequencies, and the only way the model can account for that
+is through migration: most individuals of one sample are assigned as migrants (mostly
+second-generation) from the other. The result looks like strong migration but is not:
+
+- the migration rate between the two samples is at or near its upper bound of 1/3,
+  often large in both directions;
+- the Savage-Dickey test reports decisive evidence for migration in both directions;
+- the inbreeding coefficient of one of the samples reverts to its prior (mean about 0.5,
+  SD about 0.29), because almost all its individuals are second-generation migrants,
+  which carry no information about F;
+- runs with different seeds may disagree about which sample is the source.
+
+With the default (independent) allele-frequency prior, populations that are genuinely
+distinct but have small samples can show the same pattern. The hierarchical prior
+(`-c -H`) removes this artefact for distinct populations but not for samples from one
+population. Samples that still show migration rates near 1/3 with `-c -H` should
+probably be merged into one population and the analysis repeated.
+
 ## 7 Version History
 
 - **3.5.0** (September 2026): New collapsed sampler (-c, --collapse) that integrates out

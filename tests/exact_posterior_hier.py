@@ -263,6 +263,7 @@ def main():
                         acc[("freq", q, li, k, mom + 1)] += wt * float((others * pm[q, k, mom]).sum())
 
     Z = acc["Z"]
+    logZ = offset + math.log(Z)                     # log p(G), the evidence
     out = {}
     for s in range(P):
         for j in range(P):
@@ -287,10 +288,11 @@ def main():
         for st in St[n]:
             out[f"anc {i}[{pname[st[0]]},{st[1]}]"] = (acc[("anc", n, st)] / Z, None)
     if a.json:
-        json.dump({"post": out}, open(a.json, "w"), indent=1)
+        json.dump({"post": out, "logZ": logZ}, open(a.json, "w"), indent=1)
     for k in sorted(out):
         if k.startswith(("m[", "F[", "theta[", "bf[")):
             print(f"{k:14s} mean {out[k][0]:.5f}" + (f"  SD {out[k][1]:.5f}" if out[k][1] is not None else ""))
+    print(f"log p(G) = {logZ:.6f}")
     print(f"({len(configs)} ancestry configurations; nodes F {nF}, theta {a.nodes_theta}, "
           f"pi {a.nodes_pi}/stick)")
 
