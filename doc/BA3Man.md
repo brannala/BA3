@@ -441,12 +441,23 @@ Maps numeric indices to population names for compact display of the migration ma
  Migration Rate Matrix m[i][j] (fraction of pop i from pop j):
  Mean(SD)
                    [0]            [1]            [2]
-  [0]  0.9718(0.0115) 0.0130(0.0100) 0.0152(0.0090)
-  [1]  0.0878(0.0141) 0.7338(0.0396) 0.1784(0.0407)
-  [2]  0.0870(0.0179) 0.2047(0.0326) 0.7083(0.0292)
+  [0]  0.9726(0.0112) 0.0122(0.0096) 0.0152(0.0095)
+  [1]  0.0886(0.0136) 0.7132(0.0341) 0.1981(0.0356)
+  [2]  0.0881(0.0176) 0.1995(0.0323) 0.7125(0.0295)
+ 95% HPD interval
+                    [0]             [1]             [2]
+  [0]  [0.9507,0.9923] [0.0000,0.0309] [0.0000,0.0328]
+  [1]  [0.0628,0.1158] [0.6667,0.7776] [0.1258,0.2551]
+  [2]  [0.0550,0.1225] [0.1369,0.2595] [0.6667,0.7672]
 ```
 Note that `m[i][j]` is the fraction of individuals in population i that
-are migrants derived from population j (per generation).
+are migrants derived from population j (per generation). The posterior mean and
+standard deviation are followed by the 95% highest posterior density (HPD) interval,
+the shortest interval containing 95% of the posterior samples. The posteriors of migration
+rates (and inbreeding coefficients) are often skewed and piled up against a boundary,
+so the HPD interval is a better summary than mean ± 2 SD: for a route with little or no
+migration it starts at 0 (as for `m[0][1]` above), and the non-migrant fraction `m[i][i]`
+cannot be below 2/3.
 
 #### Savage-Dickey Density Ratio Test
 
@@ -501,24 +512,25 @@ relied on.
 #### Inbreeding Coefficients
 ```
  Inbreeding Coefficients:
- Index  Population                     F(SD)
- -----  ----------                     -----
- [ 0]  pop0                     0.2552(0.0367)
- [ 1]  pop1                     0.0810(0.0588)
- [ 2]  pop2                     0.2698(0.0891)
+ Index  Population                     F(SD)          95% HPD
+ -----  ----------                     -----          -------
+ [ 0]  pop0                     0.2568(0.0360)  [0.1876,0.3289]
+ [ 1]  pop1                     0.0742(0.0575)  [0.0000,0.1879]
+ [ 2]  pop2                     0.2653(0.0766)  [0.1131,0.4192]
 ```
+Posterior mean (SD) and 95% HPD interval of the inbreeding coefficient of each population.
 
 #### Drift from Ancestral Frequencies (-H only)
 ```
  Drift from Ancestral Frequencies (hierarchical prior):
- Index  Population                 theta(SD)
- -----  ----------                 ---------
- [ 0]  pop0                     0.3442(0.0881)
- [ 1]  pop1                     0.1496(0.0894)
- [ 2]  pop2                     0.0954(0.0695)
+ Index  Population                 theta(SD)          95% HPD
+ -----  ----------                 ---------          -------
+ [ 0]  pop0                     0.3441(0.0902)  [0.1769,0.5235]
+ [ 1]  pop1                     0.1417(0.0955)  [0.0051,0.3205]
+ [ 2]  pop2                     0.1036(0.0833)  [0.0013,0.2788]
 ```
-Posterior mean and SD of each population's drift $\theta_q$ from the shared ancestral
-allele frequencies (section 4.7).
+Posterior mean (SD) and 95% HPD interval of each population's drift $\theta_q$ from the
+shared ancestral allele frequencies (section 4.7).
 
 ### 5.2 Allele frequencies file (-F option)
 
@@ -623,6 +635,9 @@ probably be merged into one population and the analysis repeated.
 
 ## 7 Version History
 
+- **3.6.1** (October 2026): 95% highest posterior density (HPD) intervals for migration
+  rates (a matrix below the posterior means), inbreeding coefficients and, with -H, drift
+  parameters (section 5.1). Results are otherwise unchanged.
 - **3.6.0** (October 2026): New hierarchical allele-frequency prior (-H, --hier, with -c),
   which removes an artefact of the independent prior in which, with small samples, whole
   populations are assigned as migrants (section 4.7). Bug fix: the Savage-Dickey Bayes

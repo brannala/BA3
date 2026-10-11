@@ -58,6 +58,41 @@ def read_ba3(fn):
     return ind_order, pop_of, pop_order, loci, alleles, geno
 
 
+def hpd_beta_mixture(comps, level=0.95, grid=200001):
+    """Shortest interval with posterior mass `level` for u ~ sum_k w_k Beta(a_k, b_k)
+    on (0,1), computed on a grid (the definition BA3 uses for its sample-based HPD)."""
+    x = np.linspace(0.0, 1.0, grid)
+    lx, l1x = np.log(np.maximum(x, 1e-300)), np.log(np.maximum(1 - x, 1e-300))
+    dens = np.zeros(grid)
+    W = sum(w for w, _, _ in comps)
+    for w, a, b in comps:
+        lb = math.lgamma(a) + math.lgamma(b) - math.lgamma(a + b)
+        dens += (w / W) * np.exp((a - 1) * lx + (b - 1) * l1x - lb)
+    cdf = np.concatenate([[0.0], np.cumsum(0.5 * (dens[1:] + dens[:-1]) * np.diff(x))])
+    cdf /= cdf[-1]
+    j = np.searchsorted(cdf, cdf + level)
+    ok = j < grid
+    i = np.nonzero(ok)[0]
+    k = np.argmin(x[j[ok]] - x[i])
+    return x[i[k]], x[j[ok][k]]
+
+
+def m_hpd(acc, P, pname, out):
+    """Exact 95% HPD of every m from the accumulated Beta mixtures ('mbeta' keys):
+    u_sj = 3 m_sj for j != s, and u_0 = 3 m_ss - 2."""
+    for s in range(P):
+        for j in range(P):
+            comps = [(w, k[3], k[4]) for k, w in acc.items()
+                     if isinstance(k, tuple) and k[0] == "mbeta" and k[1] == s and k[2] == j]
+            lo, hi = hpd_beta_mixture(comps)
+            if s == j:
+                lo, hi = 2 / 3 + lo / 3, 2 / 3 + hi / 3
+            else:
+                lo, hi = lo / 3, hi / 3
+            out[f"hpdlo m[{pname[s]}][{pname[j]}]"] = (lo, None)
+            out[f"hpdhi m[{pname[s]}][{pname[j]}]"] = (hi, None)
+
+
 def ba3_pop_index(pop_order):
     # internal numbering only; results are reported by population name
     return {p: k for k, p in enumerate(pop_order)}
@@ -138,7 +173,7 @@ def main():
         anc = [St[n][cfg[n]] for n in range(N)]
         # ---- prior of the labelled ancestry assignment, m integrated out
         logPA = 0.0
-        Em, Em2, Z0 = {}, {}, {}
+        Em, Em2, Z0, Bm = {}, {}, {}, {}
         for s in range(P):
             members = [anc[n] for n in range(N) if samp[n] == s]
             n0 = sum(1 for src, age in members if age == 0)
@@ -152,6 +187,8 @@ def main():
                 Em[(s, j)] = (cj + 1) / a0 / 3.0
                 Em2[(s, j)] = (cj + 1) * (cj + 2) / (a0 * (a0 + 1)) / 9.0
                 Z0[(s, j)] = cj == 0
+                Bm[(s, j)] = (cj + 1, a0 - cj - 1)          # u_sj = 3 m_sj ~ Beta
+            Bm[(s, s)] = (n0 + 1, a0 - n0 - 1)              # u_0 = 3 m_ss - 2 ~ Beta
         # ---- genotype likelihood: per locus, sum over latent options, as a function of F
         # per locus: dict exponent-key -> scalar sum, plus freq moment sums
         loc_W, loc_M = [], []
@@ -217,6 +254,8 @@ def main():
             acc[("m", s, j, 1)] += wt * v
             acc[("m", s, j, 2)] += wt * Em2[(s, j)]
             acc[("z0", s, j)] += wt * Z0[(s, j)]
+        for (s, j), ab in Bm.items():
+            acc[("mbeta", s, j) + ab] += wt
         for q in range(P):
             acc[("F", q, 1)] += wt * float(np.dot(gw, prodW * Fg[q])) / like
             acc[("F", q, 2)] += wt * float(np.dot(gw, prodW * Fg[q] ** 2)) / like
@@ -254,6 +293,7 @@ def main():
     for n, i in enumerate(inds):
         for st in St[n]:
             out[f"anc {i}[{pname[st[0]]},{st[1]}]"] = (acc[("anc", n, st)] / Z, None)
+    m_hpd(acc, P, pname, out)
     if a.json:
         json.dump({"post": out, "logZ": logZ}, open(a.json, "w"), indent=1)
     for k in sorted(out):

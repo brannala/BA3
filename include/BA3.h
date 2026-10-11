@@ -47,7 +47,7 @@
 
 using namespace std;
 
-const string VERSION="3.6.0";
+const string VERSION="3.6.1";
 const string RELEASEDATE="10/10/2026";
 
 // Unified limits - supports both SNP and microsatellite data
@@ -113,6 +113,10 @@ void proposeMigrantAncDrop(unsigned int &migrantPopln, unsigned int &migrantAge,
 void proposeMigrantAncAdd(unsigned int &migrantPopAdd, unsigned int &migrantAgeAdd,unsigned int migrantPopDrop, unsigned int migrantAgeDrop,
 						  unsigned int samplePopln, int noPopln);
 int countNonEmptyAncestryCategories(long int ***migrantCounts, unsigned int samplePopln, unsigned int noPopln);
+
+// 95% HPD intervals of sampled values
+void hpdInterval(std::vector<float> &x, double level, double &lo, double &hi);
+std::string hpdString(std::vector<float> &x);
 
 // Savage-Dickey density ratio test functions
 void initSavageDickeyStats(SavageDickeyStats **sdStats, unsigned int noPopln);

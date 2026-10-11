@@ -1539,6 +1539,9 @@ common_processing:
 		log1MinusFStat[i] = log(1.0);  // log(1-0) = 0
 	}
 
+	// Sampled values of m, F and theta, for the 95% HPD intervals in the output
+	std::vector<std::vector<float> > mSamples(noPopln * noPopln), fSamples(noPopln), thSamples(noPopln);
+
 	// Allocate and initialize Savage-Dickey statistics for migration rate testing
 	SavageDickeyStats **sdStats = new SavageDickeyStats*[noPopln];
 	for (unsigned int i = 0; i < noPopln; i++) {
@@ -2490,6 +2493,7 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 						varMigrationRates[l][k] = ((iter-1.0)/iter)*varMigrationRates[l][k]+sqrDiffMean;
 					}
 						avgMigrationRates[l][k] = avgMigrationRates[l][k]+(migrationRates[l][k]-avgMigrationRates[l][k])/(1.0+iter);
+					mSamples[l * noPopln + k].push_back((float)migrationRates[l][k]);
 				}
 
 			// Update Savage-Dickey statistics for migration rate hypothesis testing
@@ -2531,6 +2535,7 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 					varFStat[l] = ((iter-1.0)/iter)*varFStat[l]+sqrDiffMean;
 				}
 				avgFStat[l] = avgFStat[l]+(FStat[l]-avgFStat[l])/(1.0+iter);
+				fSamples[l].push_back((float)FStat[l]);
 			}
 
 			if (gHier)
@@ -2542,6 +2547,7 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 						varTheta[l] = ((iter-1.0)/iter)*varTheta[l]+sqrDiffMean;
 					}
 					avgTheta[l] = avgTheta[l]+(gTheta[l]-avgTheta[l])/(1.0+iter);
+					thSamples[l].push_back((float)gTheta[l]);
 				}
 
 			for (unsigned int l=0; l < noIndiv; l++)
@@ -2679,12 +2685,31 @@ mcmcout << "\n Population Labels:\n";
 		mcmcout << "\n";
 	}
 
+	mcmcout << " 95% HPD interval\n";
+	mcmcout << "       ";
+	for (unsigned int k = 0; k < noPopln; k++)
+	{
+		std::ostringstream hdr;
+		hdr << "[" << k << "]";
+		mcmcout << std::setw(16) << hdr.str();
+	}
+	mcmcout << "\n";
+	for (unsigned int l = 0; l < noPopln; l++)
+	{
+		std::ostringstream rowHdr;
+		rowHdr << "[" << l << "]";
+		mcmcout << " " << std::setw(4) << rowHdr.str() << " ";
+		for (unsigned int k = 0; k < noPopln; k++)
+			mcmcout << std::setw(16) << hpdString(mSamples[l * noPopln + k]);
+		mcmcout << "\n";
+	}
+
 	// Output Savage-Dickey test results for zero migration hypotheses
 	computeSavageDickeyBayesFactors(sdStats, migrantCounts, noPopln, mcmcout, poplnNames);
 
 	mcmcout << "\n Inbreeding Coefficients:\n";
-	mcmcout << " Index  Population                     F(SD)\n";
-	mcmcout << " -----  ----------                     -----\n";
+	mcmcout << " Index  Population                     F(SD)          95% HPD\n";
+	mcmcout << " -----  ----------                     -----          -------\n";
 	mcmcout.setf(std::ios::fixed, std::ios::floatfield);
 	for (unsigned int l = 0; l < noPopln; l++)
 	{
@@ -2693,14 +2718,15 @@ mcmcout << "\n Population Labels:\n";
 		      << "(" << std::setprecision(4) << sqrt(varFStat[l]) << ")";
 		mcmcout << " [" << std::setw(2) << l << "]  "
 		        << std::left << std::setw(25) << poplnNames[l]
-		        << std::right << std::setw(14) << fstat.str() << "\n";
+		        << std::right << std::setw(14) << fstat.str()
+		        << std::setw(17) << hpdString(fSamples[l]) << "\n";
 	}
 
 	if (gHier)
 	{
 		mcmcout << "\n Drift from Ancestral Frequencies (hierarchical prior):\n";
-		mcmcout << " Index  Population                 theta(SD)\n";
-		mcmcout << " -----  ----------                 ---------\n";
+		mcmcout << " Index  Population                 theta(SD)          95% HPD\n";
+		mcmcout << " -----  ----------                 ---------          -------\n";
 		for (unsigned int l = 0; l < noPopln; l++)
 		{
 			std::ostringstream th;
@@ -2708,7 +2734,8 @@ mcmcout << "\n Population Labels:\n";
 			   << "(" << std::setprecision(4) << sqrt(varTheta[l]) << ")";
 			mcmcout << " [" << std::setw(2) << l << "]  "
 			        << std::left << std::setw(25) << poplnNames[l]
-			        << std::right << std::setw(14) << th.str() << "\n";
+			        << std::right << std::setw(14) << th.str()
+			        << std::setw(17) << hpdString(thSamples[l]) << "\n";
 		}
 	}
 
@@ -3796,6 +3823,36 @@ int countNonEmptyAncestryCategories(long int ***migrantCounts, unsigned int samp
 	}
 
 	return count;
+}
+
+// Highest posterior density interval at the given level from MCMC samples: the
+// shortest interval [x_(i), x_(i+k-1)] containing k = ceil(level n) of the n
+// sorted samples. For a posterior piled up at a boundary (m or F near 0) it
+// includes the boundary, unlike an equal-tailed interval.
+void hpdInterval(std::vector<float> &x, double level, double &lo, double &hi)
+{
+	size_t n = x.size();
+	if (n == 0) { lo = hi = NAN; return; }
+	std::sort(x.begin(), x.end());
+	size_t k = (size_t)ceil(level * n);
+	if (k < 1) k = 1;
+	if (k > n) k = n;
+	size_t best = 0;
+	float width = x[k - 1] - x[0];
+	for (size_t i = 1; i + k - 1 < n; i++)
+		if (x[i + k - 1] - x[i] < width) { width = x[i + k - 1] - x[i]; best = i; }
+	lo = x[best];
+	hi = x[best + k - 1];
+}
+
+// "[lo,hi]" with 4 decimals, the 95% HPD interval of the samples
+std::string hpdString(std::vector<float> &x)
+{
+	double lo, hi;
+	hpdInterval(x, 0.95, lo, hi);
+	std::ostringstream s;
+	s << std::fixed << std::setprecision(4) << "[" << lo << "," << hi << "]";
+	return s.str();
 }
 
 /*

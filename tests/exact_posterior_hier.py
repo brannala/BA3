@@ -20,7 +20,7 @@ import numpy as np
 gammaln = np.vectorize(math.lgamma, otypes=[float])
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from exact_posterior import read_ba3, ba3_pop_index  # noqa: E402
+from exact_posterior import read_ba3, ba3_pop_index, m_hpd  # noqa: E402
 
 
 def gl01(n):
@@ -180,7 +180,7 @@ def main():
     for cfg in configs:
         anc = [St[n][cfg[n]] for n in range(N)]
         logPA = 0.0
-        Em, Em2, Z0 = {}, {}, {}
+        Em, Em2, Z0, Bm = {}, {}, {}, {}
         for s in range(P):
             members = [anc[n] for n in range(N) if samp[n] == s]
             n0 = sum(1 for src, age in members if age == 0)
@@ -194,6 +194,8 @@ def main():
                 Em[(s, j)] = (cj + 1) / a0 / 3.0
                 Em2[(s, j)] = (cj + 1) * (cj + 2) / (a0 * (a0 + 1)) / 9.0
                 Z0[(s, j)] = cj == 0
+                Bm[(s, j)] = (cj + 1, a0 - cj - 1)          # u_sj = 3 m_sj ~ Beta
+            Bm[(s, s)] = (n0 + 1, a0 - n0 - 1)              # u_0 = 3 m_ss - 2 ~ Beta
 
         # per locus: factor over (F grid) x (theta grid), and its moment versions
         loc = []
@@ -243,6 +245,8 @@ def main():
             acc[("m", s, j, 1)] += wt * v
             acc[("m", s, j, 2)] += wt * Em2[(s, j)]
             acc[("z0", s, j)] += wt * Z0[(s, j)]
+        for (s, j), ab in Bm.items():
+            acc[("mbeta", s, j) + ab] += wt
         post = W2 * prod / like
         for q in range(P):
             fq = Fg[q][:, None]
@@ -287,6 +291,7 @@ def main():
     for n, i in enumerate(inds):
         for st in St[n]:
             out[f"anc {i}[{pname[st[0]]},{st[1]}]"] = (acc[("anc", n, st)] / Z, None)
+    m_hpd(acc, P, pname, out)
     if a.json:
         json.dump({"post": out, "logZ": logZ}, open(a.json, "w"), indent=1)
     for k in sorted(out):
