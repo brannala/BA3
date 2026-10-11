@@ -1,10 +1,10 @@
-# BayesAss Edition 3.5 User's Manual
+# BayesAss Edition 3.6 User's Manual
 
 Bruce Rannala
 
-&copy;2007-2025 University of California Davis
+&copy;2007-2026 University of California Davis
 
-Last updated 23 Dec 2025
+Last updated 10 Oct 2026
 
 ## 1 Installation
 
@@ -271,6 +271,7 @@ effects.
 | -T --autotune     | None                    | Auto-tune mixing parameters (default: on)   |
 | -N --noautotune   | None                    | Disable auto-tuning of mixing parameters    |
 | -c --collapse     | None                    | Collapsed sampler (integrate out allele freqs) |
+| -H --hier         | None                    | Hierarchical allele-frequency prior (requires -c) |
 | -V --vcf          | String                  | VCF input file (requires -M)                |
 | -M --meta         | String                  | Metadata file for VCF input                 |
 | -F --freqfile     | String                  | Output allele frequencies to separate file  |
@@ -384,6 +385,42 @@ use enough iterations and compare several runs started with different seeds (sec
 ./BA3 -c -V myin.vcf -M mymeta.txt
 ```
 
+### 4.7 Hierarchical allele-frequency prior (-H)
+
+By default the allele frequencies of each population have an independent uniform
+(Dirichlet(1)) prior. The -H (--hier) option replaces it with a hierarchical prior (the
+F-model): at each locus, all populations share ancestral allele frequencies $\pi$ (with a
+uniform Dirichlet prior), and the frequencies of population $q$ are drawn around them,
+
+$p_q \sim \mathrm{Dirichlet}(c_q \pi), \quad c_q = (1-\theta_q)/\theta_q,$
+
+where $\theta_q$ (uniform prior on (0, 1)) measures the drift of population $q$ from the
+ancestral frequencies and plays the role of an $F_{ST}$. This is also the distribution of
+allele frequencies in a deme of Wright's island model at migration-drift equilibrium. The
+ancestral frequencies and the $\theta_q$ are estimated from the data.
+
+**Why use it.** With the independent prior, a population's frequencies are learned only from
+the individuals assigned to it. With few individuals per population and modest
+differentiation, this lets the sampler explain a whole population as second-generation
+migrants from another one: its migration rate goes to its upper bound of 1/3, its inbreeding
+coefficient reverts to the prior (about 0.5, SD 0.29), and the Savage-Dickey test reports
+decisive evidence for migration. This is a property of the model, not of the sampler (the
+default sampler reaches it more slowly); it occurs with and without missing data and is most
+common with small samples. Under the hierarchical prior, populations borrow strength through
+the shared ancestral frequencies, and this artefact disappears in simulations with known
+migration (with no loss of accuracy where migration is real). Using -H is recommended
+whenever sample sizes per population are small.
+
+-H currently requires the collapsed sampler (-c). It costs about 1.2-1.4 times as much per
+iteration as -c alone. The output adds a table of the posterior mean and SD of $\theta_q$
+(section 5.1) and, with -t, a column `theta[q]` per population in the trace file. Results
+differ from the default prior because the model differs. Samples that still show migration
+rates near 1/3 with -c -H probably come from one population (section 6.5).
+```
+./BA3 -c -H myin.txt
+./BA3 -c -H -V myin.vcf -M mymeta.txt
+```
+
 ## 5 Output file format
 
 ### 5.1 Main output file
@@ -471,6 +508,18 @@ relied on.
  [ 2]  pop2                     0.2698(0.0891)
 ```
 
+#### Drift from Ancestral Frequencies (-H only)
+```
+ Drift from Ancestral Frequencies (hierarchical prior):
+ Index  Population                 theta(SD)
+ -----  ----------                 ---------
+ [ 0]  pop0                     0.3442(0.0881)
+ [ 1]  pop1                     0.1496(0.0894)
+ [ 2]  pop2                     0.0954(0.0695)
+```
+Posterior mean and SD of each population's drift $\theta_q$ from the shared ancestral
+allele frequencies (section 4.7).
+
 ### 5.2 Allele frequencies file (-F option)
 
 When using the -F option, allele frequencies are written to a separate TSV file:
@@ -543,6 +592,10 @@ and
 
 $\overline{m}_{ij} = \frac{1}{3n} \,\, \mathrm{for} \,\, i \neq j.$
 
+With -H, the allele frequencies have the hierarchical prior of section 4.7: at each locus,
+uniform Dirichlet ancestral frequencies $\pi$, population frequencies Dirichlet($c_q \pi$) with
+$c_q = (1-\theta_q)/\theta_q$, and $\theta_q$ uniform on (0, 1).
+
 The KL(bits) column in the Savage-Dickey test output indicates how much information the data
 provides about each migration rate (higher values = more informative data).
 
@@ -570,6 +623,15 @@ probably be merged into one population and the analysis repeated.
 
 ## 7 Version History
 
+- **3.6.0** (October 2026): New hierarchical allele-frequency prior (-H, --hier, with -c),
+  which removes an artefact of the independent prior in which, with small samples, whole
+  populations are assigned as migrants (section 4.7). Bug fix: the Savage-Dickey Bayes
+  factor for zero migration (BF_01) was overstated, by a factor of about 30 with 10
+  populations, because the kernel density estimate used inconsistent bandwidths and the prior
+  density at zero was taken as 3 instead of 3(K-1); BF_01 is now computed exactly, and a
+  Pr(c=0) column is added (section 5.1). Results of the test in versions 3.4.0 to 3.5.0
+  overstated the evidence for no migration. New advice on samples that should be merged
+  (section 6.5).
 - **3.5.0** (September 2026): New collapsed sampler (-c, --collapse) that integrates out
   allele frequencies; much faster, especially for large samples. Two bug fixes in the
   default sampler that change results for data with missing genotypes or with loci having

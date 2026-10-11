@@ -1,24 +1,29 @@
 # BA3 tests
 
-Validation and benchmark scripts for the collapsed sampler (`-c/--collapse`) and
-for the standard sampler. The Python scripts need numpy (`exact_posterior.py`,
-`check_exact.py`, `bench.py`).
+Validation and benchmark scripts for the collapsed sampler (`-c/--collapse`), the
+hierarchical allele-frequency prior (`-H/--hier`) and the standard sampler. The
+Python scripts need numpy.
 
 ```bash
 # a reference build, e.g. the last release
-git worktree add /tmp/ba3-ref v3.5.0 && make -C /tmp/ba3-ref
+git worktree add /tmp/ba3-ref v3.6.0 && make -C /tmp/ba3-ref
 
-tests/regress_default.sh /tmp/ba3-ref/BA3 ./BA3              # ~4 min
+tests/regress_default.sh /tmp/ba3-ref/BA3 ./BA3              # ~4 min (--no-sd against 3.5.0)
 tests/check_exact.py ref=/tmp/ba3-ref/BA3 collapse=./BA3:-c  # exact posterior; ~5 min on 8 cores
+tests/check_exact.py --hier hier=./BA3:"-c -H"               # exact posterior, -H; ~15 min
 tests/compare_collapse.py /tmp/ba3-ref/BA3 ./BA3              # ~1 h on 8 cores (--quick: ~5 min)
 tests/bench.py /tmp/ba3-ref/BA3 ./BA3                         # run on an idle machine
+tests/bench_hier.py c=./BA3:-c hier=./BA3:"-c -H" --data ...  # ESS/s, -c vs -c -H
 ```
 
 | Script | Checks |
 |---|---|
-| `regress_default.sh` | Without `-c`, the new binary is **byte-identical** to the reference for the same seed: all output files (main output, trace, `BA3indiv.txt`, `-F` frequencies) and stdout, on native and VCF inputs, with and without missing data. |
-| `check_exact.py` | Every build given is run with R seeds on the tiny data sets `data/exact_*.txt`, and each posterior mean and SD (migration rates, F, allele frequencies, individual ancestry probabilities) is compared with the **exact posterior** from `exact_posterior.py`. A group fails if any \|z\| > 4 or more than 2% exceed 3. |
-| `exact_posterior.py` | Exact BA3 posterior by enumeration of all (2P-1)^N ancestry assignments, with migration rates (Dirichlet), allele frequencies (Dirichlet-multinomial, IBD indicators and age-2 phase summed) and F (Gauss-Legendre quadrature, exact for these polynomial integrands) integrated out. Keep N small (8 individuals, 2 populations: 6561 assignments, ~4 s). |
+| `regress_default.sh` | Without `-c`, the new binary is **byte-identical** to the reference for the same seed: all output files (main output, trace, `BA3indiv.txt`, `-F` frequencies) and stdout, on native and VCF inputs, with and without missing data. `--no-sd` excludes the Savage-Dickey table (needed against 3.5.0 and earlier, whose Bayes factors were wrong). |
+| `check_exact.py` | Every build given is run with R seeds on the tiny data sets `data/exact_*.txt`, and each posterior mean and SD (migration rates, F, allele frequencies, individual ancestry probabilities, Savage-Dickey Pr(c=0) and BF_01; theta with `--hier`) is compared with the **exact posterior** from `exact_posterior.py` (or `exact_posterior_hier.py`). A group fails if any \|z\| > 4 or more than 2% exceed 3. |
+| `exact_posterior.py` | Exact BA3 posterior by enumeration of all (2P-1)^N ancestry assignments, with migration rates (Dirichlet), allele frequencies (Dirichlet-multinomial, IBD indicators and age-2 phase summed) and F (Gauss-Legendre quadrature, exact for these polynomial integrands) integrated out. Also reports log p(G). Keep N small (8 individuals, 2 populations: 6561 assignments, ~4 s). |
+| `exact_posterior_hier.py` | The same under the hierarchical prior (`-H`): ancestral frequencies by a stick-breaking simplex rule and theta by Gauss-Legendre quadrature (check convergence with `--nodes-pi`, `--nodes-theta`; ~2-5 min per data set). |
+| `proto_hier.py` | Python reference implementation of the collapsed sampler with or without the hierarchical prior. |
+| `bench_hier.py` | Seconds per 100k iterations, median and minimum ESS, and ESS per second for several builds/flag sets on given data sets. |
 | `compare_collapse.py` | With `-c`, posterior means agree with a standard-sampler build on the example data sets (R seeds per mode, z-scores from between-seed standard errors). Between-seed SEs are optimistic for slowly mixing quantities, so use long chains. |
 | `bench.py` | Seconds per 100k iterations, speedup, effective sample size (ESS) of the migration-rate traces, and ESS per second for both samplers. `--snp DIR` adds the empirical SNP sets. |
 

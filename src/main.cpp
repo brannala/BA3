@@ -1167,8 +1167,8 @@ int main( int argc, char *argv[] )
 				break;
 
 			case 'h':
-				std::cout << "usage: BA3 [-sinbomaf] [-vhugptTNc] file ..." << "\n";
-				std::cout << "       BA3 -V vcf_file -M meta_file [-sinbomaf] [-vhugptTNc]" << "\n";
+				std::cout << "usage: BA3 [-sinbomaf] [-vhugptTNcH] file ..." << "\n";
+				std::cout << "       BA3 -V vcf_file -M meta_file [-sinbomaf] [-vhugptTNcH]" << "\n";
 				std::cout << "    mcmc analysis of recent migration rates\n\n";
 				std::cout << "  Input options:\n";
 				std::cout << "    file              BA3 format input file (default)\n";
