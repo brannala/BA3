@@ -14,428 +14,580 @@
 \newcommand{\KL}{\mathrm{KL}}
 \newcommand{\BF}{\mathrm{BF}}
 \newcommand{\data}{\mathcal{D}}
+\newcommand{\Dir}{\mathrm{Dirichlet}}
+\newcommand{\Beta}{\mathrm{Beta}}
+\newcommand{\1}{\mathbf{1}}
 
-\title{Implementation of the Savage-Dickey Density Ratio Test and\\Kullback-Leibler Divergence in BA3}
+\newtheorem{proposition}{Proposition}
+
+\title{The Savage--Dickey Test for Zero Migration in BA3}
 \author{BA3 Technical Documentation}
-\date{\today}
+\date{BA3 3.6.0 and later}
 
 \begin{document}
 
 \maketitle
 
 \begin{abstract}
-\textbf{Superseded.} This note describes the kernel-density estimator used in
-BA3 3.4.0--3.5.0, which is incorrect: the prior of $m_{ij}$ is not
-Uniform$(0,\frac13)$ but $3\,\mathrm{Beta}(1,K-1)$ (a flat Dirichlet on $3m$ over
-$K$ categories), with density $3(K-1)$ at zero, and the kernel sum was normalized
-with a different bandwidth from the one used to accumulate it. BA3 now computes
-$BF_{01} = \Pr(c_{ij}=0 \mid \text{data})\,(n_i+K-1)/(K-1)$ exactly; see the
-comment above \texttt{initSavageDickeyStats} in \texttt{src/main.cpp} and the manual.
-
-This document provides a detailed mathematical description of the Savage-Dickey density ratio test and Kullback-Leibler divergence statistics as implemented in BA3 (BayesAss Edition 3) for testing hypotheses about migration rates between populations. We describe the theoretical foundations, computational methods including kernel density estimation with boundary correction, and the interpretation of results.
+For every ordered pair of populations, BA3 reports a Bayes factor for the
+hypothesis of no migration, $H_0\colon m_{ij}=0$, against $H_1\colon m_{ij}>0$,
+computed by the Savage--Dickey density ratio. This note gives the model, the
+derivation and the implementation used from BA3 3.6.0 onward. Because the
+migration rates affect the data only through the ancestry of the sampled
+individuals, the posterior density of $m_{ij}$ at zero can be computed exactly
+given the sampled ancestries, and averaged over the MCMC sample
+(Rao--Blackwellization). The result is
+\[
+\BF_{01} \;=\; \Pr(c_{ij}=0 \mid \data)\,\frac{n_i+K-1}{K-1},
+\]
+where $c_{ij}$ is the number of individuals sampled in population $i$ that are
+first- or second-generation migrants from $j$, $n_i$ is the number of
+individuals sampled in $i$, and $K$ is the number of populations. The estimate
+is exact up to Monte Carlo error: there is no bandwidth or threshold to choose.
+It shows that the evidence for $H_0$ can never exceed $(n_i+K-1)/(K-1)$, so
+it grows with the number of individuals sampled, not with the number of loci.
+Section~\ref{sec:old} describes the kernel-density estimator used in versions
+3.4.0--3.5.0 and the two errors that made it overstate $\BF_{01}$.
 \end{abstract}
 
 \tableofcontents
 
-\section{Introduction}
+%======================================================================
+\section{The migration model and its prior}
+\label{sec:model}
 
-In population genetics, a fundamental question is whether migration occurs between populations. BA3 implements the Savage-Dickey density ratio test to formally test the hypothesis of zero migration between any pair of populations. Additionally, the Kullback-Leibler divergence provides a measure of information gain from prior to posterior, quantifying how much the data have informed our beliefs about migration rates.
+\subsection{Migration rates and ancestry}
 
-\section{Model Setup}
-
-\subsection{Migration Rate Parameters}
-
-Let $m_{ij}$ denote the per-generation migration rate from population $j$ to population $i$ (the proportion of individuals in population $i$ that are immigrants from population $j$). The BA3 model imposes the following constraints:
-
+Let $K$ be the number of sampled populations. For a receiving population $i$,
+$m_{ij}$ ($j\neq i$) is the fraction of individuals in $i$ that are migrants,
+or offspring of migrants, from $j$ within the last two generations, and
+$m_{ii} = 1-\sum_{j\neq i} m_{ij}$. An individual sampled in $i$ has one of
+$2K-1$ ancestries, with prior probabilities
 \begin{align}
-m_{ii} &\geq \frac{2}{3} \quad \text{(most individuals are non-migrants)} \\
-\sum_{j \neq i} m_{ij} &\leq \frac{1}{3} \quad \text{(bounded total immigration)}
+\Pr(\text{non-migrant}) &= 1 - 3\textstyle\sum_{j\neq i} m_{ij}, \label{eq:anc0}\\
+\Pr(\text{first-generation migrant from } j) &= m_{ij}, \label{eq:anc1}\\
+\Pr(\text{second-generation migrant from } j) &= 2\,m_{ij}. \label{eq:anc2}
 \end{align}
-
-\subsection{Prior Distribution}
-
-The prior distribution for each off-diagonal migration rate $m_{ij}$ (where $i \neq j$) is uniform on the interval $[0, \frac{1}{3}]$:
+These probabilities must be non-negative, which requires
 \begin{equation}
-m_{ij} \sim \text{Uniform}\left(0, \frac{1}{3}\right), \quad i \neq j
+m_{ij}\ge 0, \qquad \sum_{j\neq i} m_{ij} \le \tfrac13 \quad(\text{equivalently } m_{ii}\ge \tfrac23).
+\label{eq:constraint}
 \end{equation}
 
-The prior density function is therefore:
+For the $n_i$ individuals sampled in population $i$, let $z$ denote their
+ancestries and define the counts
+\begin{align*}
+n_{i0} &= \text{number of non-migrants},\\
+n_{ij1} &= \text{number of first-generation migrants from } j, \quad j\neq i,\\
+n_{ij2} &= \text{number of second-generation migrants from } j, \quad j\neq i,
+\end{align*}
+and the total number of migrants from $j$, of either generation,
 \begin{equation}
-\pi(m_{ij}) =
+c_{ij} = n_{ij1} + n_{ij2},
+\label{eq:cij}
+\end{equation}
+so that $n_{i0} + \sum_{j\neq i} c_{ij} = n_i$. The event $c_{ij}=0$ (the
+sample from $i$ contains no migrants from $j$) is the sample counterpart of
+$H_0\colon m_{ij}=0$ in Section~\ref{sec:sd}. In the source code the counts
+are \texttt{migrantCounts[i][i][0]}, \texttt{migrantCounts[i][j][1]} and
+\texttt{migrantCounts[i][j][2]}.
+
+\subsection{The prior on migration rates}
+
+The rows of the migration matrix are a priori independent, and each row is
+uniform on the region (\ref{eq:constraint}). With the change of variables
+\[
+u_{ij} = 3\,m_{ij}\quad (j\neq i), \qquad u_{i0} = 1-\sum_{j\neq i} u_{ij},
+\]
+the region becomes the $(K-1)$-dimensional probability simplex in the $K$
+coordinates $(u_{i0}, u_{ij}, j\neq i)$, and the uniform prior is
+\begin{equation}
+(u_{i0}, u_{ij}, j\neq i) \sim \Dir(1,\ldots,1) \quad\text{over } K \text{ categories}.
+\label{eq:dirprior}
+\end{equation}
+
+\paragraph{Derivation.}
+The free coordinates of row $i$ are the $d=K-1$ off-diagonal values
+$u_{ij}$, $j\neq i$; $u_{i0}$ is determined by them. The map $m\mapsto u=3m$
+has constant Jacobian $3^{d}$, so a prior that is uniform in $m$ on
+(\ref{eq:constraint}) is uniform in $u$ on the region
+\[
+S_d(1) = \Big\{u_{ij}\ge 0,\ \textstyle\sum_{j\neq i}u_{ij}\le 1\Big\}.
+\]
+A corner simplex $S_d(r)=\{x\in\mathbb{R}^d: x_k\ge 0,\ \sum_k x_k\le r\}$
+has volume $r^d/d!$. The uniform density on $S_d(1)$ is therefore $d! =
+(K-1)!$, which is the $\Dir(1,\ldots,1)$ density over $K$ categories,
+$\Gamma(K)/\Gamma(1)^K = (K-1)!$. This proves (\ref{eq:dirprior}).
+
+To obtain the marginal of one coordinate, fix $u_{ij}=u\in[0,1]$. The other
+$d-1=K-2$ off-diagonal coordinates range over $S_{K-2}(1-u)$, whose volume is
+$(1-u)^{K-2}/(K-2)!$. Integrating them out,
+\[
+p(u_{ij}=u) = (K-1)!\,\frac{(1-u)^{K-2}}{(K-2)!} = (K-1)(1-u)^{K-2},
+\qquad 0\le u\le 1,
+\]
+which is the $\Beta(1,K-1)$ density. Finally, $m_{ij}=u_{ij}/3$ gives
+$p(m_{ij}=m) = 3\,p(u_{ij}=3m)$, so the marginal prior of $m_{ij}$ is
+\begin{equation}
+p(m_{ij}) = 3(K-1)\,(1-3m_{ij})^{K-2}, \qquad 0\le m_{ij}\le \tfrac13,
+\label{eq:marginalprior}
+\end{equation}
+and setting $m_{ij}=0$,
+\begin{equation}
+\boxed{\;p(m_{ij}=0) = 3(K-1).\;}
+\label{eq:prior0}
+\end{equation}
+For $K=2$ there is a single off-diagonal rate, $S_{0}$ is a point, and
+(\ref{eq:marginalprior}) reduces to the Uniform$(0,\frac13)$ density $3$.
+For $K>2$ the marginal piles up toward zero because the $K-1$ off-diagonal rates
+share the total of at most $\frac13$.
+
+\paragraph{The prior the sampler targets.}
+Equation (\ref{eq:dirprior}) is the prior the MCMC actually samples. The
+migration-rate move in \texttt{src/main.cpp} picks a row $i$ and one source
+$j$, proposes $m_{ij}' = m_{ij} + \delta(U-\frac12)$ with $U\sim
+U(0,1)$, and reflects $m_{ij}'$ into $[0, \frac13 - \sum_{k\neq i,j} m_{ik}]$.
+For fixed values of the other rates, this proposal is symmetric. The
+Metropolis--Hastings ratio contains only the probability of the ancestry counts
+under (\ref{eq:anc0})--(\ref{eq:anc2}), with no prior term. The stationary
+distribution is therefore the likelihood times a prior that is flat on
+(\ref{eq:constraint}). As a check, running this move with all counts set to
+zero (so that the chain samples the prior) gives
+$\Pr(m_{ij}<\varepsilon)/\varepsilon$ with $\varepsilon=0.002$ equal to $9.0$
+for $K=4$ and $26.6$ for $K=10$. The exact values are $8.9$ and $26.4$, and
+(\ref{eq:prior0}) gives $9$ and $27$ in the limit.
+
+\subsection{Prior probability of no migrants in the sample}
+
+Each of the $n_i$ individuals is, independently given the migration rates, a
+migrant from $j$ (of either generation) with probability
+$m_{ij}+2m_{ij}=3m_{ij}=u_{ij}$, so given $u_{ij}$ the probability that none is
+a migrant from $j$ is $(1-u_{ij})^{n_i}$. Averaging over the marginal prior
+$(K-1)(1-u)^{K-2}$ of $u_{ij}$ derived above,
+\begin{equation}
+\Pr(c_{ij}=0) = \E\big[(1-u_{ij})^{n_i}\big]
+= \int_0^1 (K-1)(1-u)^{n_i+K-2}\,du = \frac{K-1}{n_i+K-1}.
+\label{eq:priorc0}
+\end{equation}
+(More generally, $c_{ij}$ is beta-binomial with parameters $(n_i, 1, K-1)$.)
+This is the prior probability that none of the $n_i$ sampled individuals is a
+migrant from $j$.
+
+%======================================================================
+\section{The Savage--Dickey density ratio}
+\label{sec:sd}
+
+\subsection{Hypotheses}
+
+For each ordered pair $(i,j)$, $j\neq i$, BA3 tests
+\begin{align*}
+H_0&\colon m_{ij}=0 \quad\text{(no migration from } j \text{ into } i),\\
+H_1&\colon m_{ij}>0,
+\end{align*}
+where $H_1$ is the full BA3 model. The Bayes factor is
+$\BF_{01} = p(\data\mid H_0)/p(\data\mid H_1)$.
+
+\subsection{The identity}
+
+When $H_0$ fixes a parameter at a point inside the parameter space of $H_1$,
+and the prior on the remaining parameters under $H_0$ equals their conditional
+prior under $H_1$ at that point, then (Dickey, 1971; Verdinelli \& Wasserman,
+1995)
+\begin{equation}
+\BF_{01} = \frac{p(m_{ij}=0 \mid \data, H_1)}{p(m_{ij}=0 \mid H_1)}.
+\label{eq:sd}
+\end{equation}
+The ratio is the posterior density at zero over the prior density at zero, both
+under the full model.
+
+\paragraph{The condition holds here.}
+Under $H_1$, the conditional prior of the remaining coordinates of row $i$
+given $u_{ij}=0$ is $\Dir(1,\ldots,1)$ over the other $K-1$ categories. That
+is, it is flat on the reduced region. All other parameters (other rows, allele
+frequencies, inbreeding coefficients and, with \texttt{-H}, the ancestral
+frequencies and drift parameters) are a priori independent of row $i$.
+$H_0$ is therefore the BA3 model with the route $j\to i$ removed and the same
+flat prior on everything else, which is the natural null model.
+
+%======================================================================
+\section{Exact posterior density at zero}
+\label{sec:exact}
+
+\subsection{The full conditional of a migration row}
+
+The data $\data$ (genotypes) depend on the migration rates only through the
+ancestries $z$: given $z$, the genotype probabilities involve allele
+frequencies and inbreeding coefficients but not $m$. Hence
+$m \perp \data \mid z$, and the full conditional of row $i$ depends only on the
+counts of that row. Under (\ref{eq:anc0})--(\ref{eq:anc2}), the probability of the
+ancestries of the $n_i$ individuals is
+\[
+p(z_i \mid u) \;=\; u_{i0}^{\,n_{i0}}
+\prod_{j\neq i} \Big(\frac{u_{ij}}{3}\Big)^{n_{ij1}} \Big(\frac{2u_{ij}}{3}\Big)^{n_{ij2}}
+\;=\; u_{i0}^{\,n_{i0}} \prod_{j\neq i} \frac{2^{\,n_{ij2}}}{3^{\,c_{ij}}}\, u_{ij}^{\,c_{ij}}
+\;\propto\; u_{i0}^{\,n_{i0}} \prod_{j\neq i} u_{ij}^{\,c_{ij}},
+\]
+using $u_{i0} = 1-\sum_{j\neq i}u_{ij}$ and (\ref{eq:cij}). Each migrant from
+$j$ contributes one factor of $u_{ij}$, whichever its generation. The factor 2
+for a second-generation migrant does not involve $u$ and cancels on
+normalization, so only the total $c_{ij}$ matters. With the Dirichlet prior
+(\ref{eq:dirprior}),
+\begin{equation}
+(u_{i0}, u_{ij}, j\neq i) \mid z \;\sim\; \Dir\big(n_{i0}+1,\; c_{ij}+1,\; j\neq i\big),
+\end{equation}
+whose parameters sum to $n_i+K$. The marginal of one coordinate is
+\begin{equation}
+u_{ij} \mid z \;\sim\; \Beta\big(c_{ij}+1,\; n_i+K-1-c_{ij}\big).
+\label{eq:condbeta}
+\end{equation}
+
+\subsection{Density at zero}
+
+A $\Beta(a,b)$ density at zero is $b$ if $a=1$ and $0$ if $a>1$. From
+(\ref{eq:condbeta}), and multiplying by $3$ for $m_{ij}=u_{ij}/3$,
+\begin{equation}
+p(m_{ij}=0 \mid z) =
 \begin{cases}
-3 & \text{if } 0 \leq m_{ij} \leq \frac{1}{3} \\
-0 & \text{otherwise}
+3\,(n_i+K-1) & \text{if } c_{ij}=0,\\
+0 & \text{if } c_{ij}\ge 1.
 \end{cases}
+\label{eq:cond0}
 \end{equation}
+If even one sampled individual is a migrant from $j$, a migration rate of
+exactly zero is impossible. If none is, the density at zero is the largest
+value a $\Beta(1,\cdot)$ density can take for this sample size.
 
-In particular, the prior density at zero is:
+\subsection{Rao--Blackwellization}
+
+The posterior density at zero is the posterior expectation of the conditional
+density (Gelfand \& Smith, 1990):
 \begin{equation}
-\pi(m_{ij} = 0) = 3
+p(m_{ij}=0 \mid \data) = \E\big[p(m_{ij}=0\mid z)\,\big|\,\data\big]
+= 3\,(n_i+K-1)\,\Pr(c_{ij}=0 \mid \data).
+\label{eq:post0}
 \end{equation}
+Dividing by the prior density (\ref{eq:prior0}) gives the Bayes factor. The
+factor $3$ from the Jacobian of $m=u/3$ cancels.
 
-The prior standard deviation of a Uniform$(0, \frac{1}{3})$ distribution is:
+\begin{proposition}
+Under the BA3 model,
 \begin{equation}
-\sigma_{\text{prior}} = \frac{1/3}{\sqrt{12}} = \frac{1}{3\sqrt{12}} \approx 0.0962
+\boxed{\;\BF_{01} = \Pr(c_{ij}=0\mid\data)\,\frac{n_i+K-1}{K-1}
+= \frac{\Pr(c_{ij}=0\mid\data)}{\Pr(c_{ij}=0)}.\;}
+\label{eq:bf}
 \end{equation}
+\end{proposition}
 
-\section{The Savage-Dickey Density Ratio Test}
+The second form, from (\ref{eq:priorc0}), shows that $\BF_{01}$ is the ratio of
+posterior to prior probability that the sample from $i$ contains no migrants
+from $j$.
 
-\subsection{Theoretical Foundation}
+%======================================================================
+\section{Properties}
+\label{sec:props}
 
-The Savage-Dickey density ratio (Dickey, 1971; Verdinelli \& Wasserman, 1995) provides a method for computing Bayes factors when testing a point null hypothesis that is a special case of a more general alternative.
+\paragraph{Uninformative data.}
+If the genotypes carry no information about ancestry, then
+$\Pr(c_{ij}=0\mid\data)=\Pr(c_{ij}=0)$ and $\BF_{01}=1$.
 
-\subsubsection{Hypothesis Framework}
-
-We test:
-\begin{align}
-H_0&: m_{ij} = 0 \quad \text{(no migration from population } j \text{ to } i\text{)} \\
-H_1&: m_{ij} > 0 \quad \text{(migration exists)}
-\end{align}
-
-\subsubsection{Bayes Factor Definition}
-
-The Bayes factor in favor of the null hypothesis $H_0$ over the alternative $H_1$ is:
+\paragraph{Evidence for no migration is bounded.}
+Since $\Pr(c_{ij}=0\mid\data)\le 1$,
 \begin{equation}
-\BF_{01} = \frac{P(\data \mid H_0)}{P(\data \mid H_1)}
+\BF_{01} \le \frac{n_i+K-1}{K-1}.
+\label{eq:bound}
 \end{equation}
+The bound is reached when the data establish with certainty that no sampled
+individual is a migrant from $j$. It cannot be exceeded however many loci are
+typed: perfect knowledge of the ancestry of $n_i$ individuals still cannot
+exclude a small positive $m_{ij}$. More loci bring $\Pr(c_{ij}=0\mid\data)$
+closer to 0 or 1, and only more individuals raise the ceiling.
+Table~\ref{tab:bound} gives values. On the Jeffreys scale
+(Table~\ref{tab:jeffreys}), ``strong'' evidence for $H_0$ ($\BF_{01}>10$)
+needs $n_i > 9(K-1)$, and ``decisive'' evidence ($\BF_{01}>100$) needs
+$n_i > 99(K-1)$.
 
-where $\data$ denotes the observed genotype data.
+\begin{table}[h]
+\centering
+\begin{tabular}{rrrrrr}
+\toprule
+& \multicolumn{5}{c}{$n_i$} \\
+\cmidrule(l){2-6}
+$K$ & 10 & 20 & 50 & 100 & 200 \\
+\midrule
+2  & 11.0 & 21.0 & 51.0 & 101.0 & 201.0 \\
+4  & 4.3  & 7.7  & 17.7 & 34.3  & 67.7 \\
+10 & 2.1  & 3.2  & 6.6  & 12.1  & 23.2 \\
+\bottomrule
+\end{tabular}
+\caption{Largest attainable $\BF_{01}$, $(n_i+K-1)/(K-1)$.}
+\label{tab:bound}
+\end{table}
 
-\subsubsection{Savage-Dickey Identity}
+\paragraph{Evidence for migration is unbounded.}
+$\BF_{01}\to 0$ as $\Pr(c_{ij}=0\mid\data)\to 0$, so the evidence for
+migration can be arbitrarily strong. It is limited in practice only by the
+Monte Carlo sample size (Section~\ref{sec:mc}).
 
-The key insight of the Savage-Dickey method is that when $H_0$ specifies a point value $\theta_0$ that lies within the parameter space of $H_1$, the Bayes factor simplifies to:
+\paragraph{Relation to interval-null estimators.}
+A common way to estimate (\ref{eq:sd}) from MCMC output is to replace the point
+null by a small interval:
+\[
+\BF_{01} \approx \frac{\Pr(m_{ij}<\varepsilon\mid\data)}{\Pr(m_{ij}<\varepsilon)}.
+\]
+This is the Bayes factor for $m_{ij}<\varepsilon$ against the full model, and it
+converges to (\ref{eq:sd}) as $\varepsilon\to 0$. Given $z$, both terms are
+known exactly: $\Pr(m_{ij}<\varepsilon\mid z) = 1-(1-3\varepsilon)^{n_i+K-1}$
+when $c_{ij}=0$, and $\Pr(m_{ij}<\varepsilon) = 1-(1-3\varepsilon)^{K-1}$.
+Equation (\ref{eq:bf}) is the $\varepsilon\to 0$ limit taken analytically, so
+it has neither the bias of a finite $\varepsilon$ nor the extra variance of
+counting raw samples of $m_{ij}$ near zero. As a check, the BA3 migration move
+run with fixed counts ($n_i=50$, $K=10$, $c_{ij}=0$) gave
+$\Pr(m_{ij}<0.001)/0.001 = 162$, equal to the exact finite-$\varepsilon$ value
+$162$, which tends to $3(n_i+K-1)=177$ as $\varepsilon\to 0$.
+
+\paragraph{Model misspecification.}
+The test is exact for the BA3 model. It inherits that model's failures. In
+particular, if two samples come from one randomly mating population, BA3 can
+only explain their shared allele frequencies by migration, so $c_{ij}>0$ in
+every sampled state and $\BF_{01}$ is reported as decisive for migration in
+both directions (see the manual, ``Populations that should be merged'').
+
+%======================================================================
+\section{Monte Carlo estimation}
+\label{sec:mc}
+
+\subsection{Estimator}
+
+After burn-in, every $s$ iterations (the sampling interval \texttt{-n}), BA3
+records for each route whether $c_{ij}=0$ in the current state. With $N$
+recorded states $z^{(1)},\ldots,z^{(N)}$,
 \begin{equation}
-\BF_{01} = \frac{\pi(\theta_0 \mid \data)}{\pi(\theta_0)}
-\label{eq:savage-dickey}
+\widehat{\Pr}(c_{ij}=0\mid\data) = \frac{1}{N}\sum_{t=1}^N \1\big[c_{ij}^{(t)}=0\big],
+\qquad
+\widehat{\BF}_{01} = \widehat{\Pr}(c_{ij}=0\mid\data)\,\frac{n_i+K-1}{K-1}.
 \end{equation}
+The Monte Carlo standard error of $\widehat{\Pr}$ is approximately
+$\sqrt{\hat p(1-\hat p)/N_{\text{eff}}}$, where $N_{\text{eff}}$ is the
+effective sample size of the indicator series. Its relative error is largest
+when $\hat p$ is small, which is when the evidence for migration is strong.
 
-where:
-\begin{itemize}
-    \item $\pi(\theta_0 \mid \data)$ is the \emph{posterior} density evaluated at the point null value $\theta_0$
-    \item $\pi(\theta_0)$ is the \emph{prior} density evaluated at the same point
-\end{itemize}
+\subsection{When no recorded state has $c_{ij}=0$}
 
-For our migration rate test with $\theta_0 = 0$:
-\begin{equation}
-\boxed{\BF_{01} = \frac{p(m_{ij} = 0 \mid \data)}{p(m_{ij} = 0)} = \frac{p(m_{ij} = 0 \mid \data)}{3}}
-\end{equation}
+If $\widehat{\Pr}=0$, the estimate of $\BF_{01}$ would be $0$. BA3 instead
+reports
+\[
+\BF_{01} < \frac{1}{N}\,\frac{n_i+K-1}{K-1},
+\]
+the value that a single recorded state with $c_{ij}=0$ would give, marked with
+\texttt{<}. The interpretation gets the suffix ``or more'' (for example,
+``Strong for $H_1$ or more'') unless it is already ``Decisive for $H_1$''. This
+is a reporting convention, not a guaranteed bound: it says only that the run
+was too short to resolve values below about $1/N$. Longer runs, or a smaller
+sampling interval, lower it.
 
-\subsection{Interpretation of Bayes Factors}
+\subsection{Other details}
 
-Following the Jeffreys scale (Jeffreys, 1961), we interpret Bayes factors as shown in Table~\ref{tab:jeffreys}.
+Routes with fewer than 100 recorded states are reported as ``Insufficient
+samples''. The estimate depends on the sampler mixing between states with
+$c_{ij}=0$ and $c_{ij}>0$. A route whose indicator never or rarely changes
+during a run, or whose $\widehat{\Pr}$ differs between seeds, should be
+treated with caution. The collapsed sampler (\texttt{-c}) and the hierarchical
+allele-frequency prior (\texttt{-H}) change how the ancestries $z$ are updated
+and what prior the allele frequencies have, but not the prior on $m$ or the
+migration move, so (\ref{eq:bf}) applies unchanged.
+
+%======================================================================
+\section{Kullback--Leibler information gain}
+\label{sec:kl}
+
+The \texttt{KL(bits)} column reports
+\[
+\KL\big(p(m_{ij}\mid\data)\,\|\,p(m_{ij})\big)
+= \int_0^{1/3} p(m_{ij}\mid\data)\,\log_2\frac{p(m_{ij}\mid\data)}{p(m_{ij})}\,dm_{ij},
+\]
+the information gained about $m_{ij}$, with the exact marginal prior
+(\ref{eq:marginalprior}). The posterior density is estimated from the stored
+samples of $m_{ij}$ by a Gaussian kernel density estimate, reflected at $0$:
+\[
+\hat p(m\mid\data) = \frac{1}{Nh\sqrt{2\pi}}\sum_{t=1}^N
+\left[\exp\!\Big(-\frac{(m-m^{(t)})^2}{2h^2}\Big) + \exp\!\Big(-\frac{(m+m^{(t)})^2}{2h^2}\Big)\right],
+\]
+with Silverman's bandwidth $h = 1.06\,\hat\sigma\,N^{-1/5}$, where
+$\hat\sigma$ is the posterior standard deviation of $m_{ij}$. If $h<10^{-6}$,
+$h=0.01$ is used instead. The integral is approximated by the midpoint rule on
+$G=1000$ intervals of $[0,\frac13]$. Grid points where
+$\hat p < 10^{-10}$ are skipped, and the result is converted to bits and
+truncated at $0$. The KL statistic is descriptive only and is not used in the
+Bayes factor. Unlike $\BF_{01}$, it depends on a bandwidth and on how well a
+kernel estimate represents a posterior piled up against $0$.
+
+%======================================================================
+\section{Output and interpretation}
+\label{sec:output}
+
+Each route is reported on one line:
+\begin{center}
+\small
+\begin{tabular}{ll}
+\toprule
+Column & Meaning \\
+\midrule
+\texttt{Source}, \texttt{Dest} & population indices $j$ and $i$ \\
+\texttt{Mean(SD)} & posterior mean and SD of $m_{ij}$ \\
+\texttt{Pr(c=0)} & $\widehat{\Pr}(c_{ij}=0\mid\data)$ \\
+\texttt{BF\_01} & $\widehat{\BF}_{01}$ from (\ref{eq:bf}); \texttt{<} marks the convention of Section~\ref{sec:mc} \\
+\texttt{log10(BF)} & $\log_{10}\widehat{\BF}_{01}$ \\
+\texttt{KL(bits)} & information gain, Section~\ref{sec:kl} \\
+\texttt{Interpretation} & Jeffreys scale, Table~\ref{tab:jeffreys} \\
+\bottomrule
+\end{tabular}
+\end{center}
+A footer gives the formula, and the range of the bound (\ref{eq:bound}) over the
+populations in the data set.
 
 \begin{table}[h]
 \centering
 \begin{tabular}{lll}
 \toprule
-$\log_{10}(\BF_{01})$ & $\BF_{01}$ & Evidence \\
+$\log_{10}\BF_{01}$ & $\BF_{01}$ & Interpretation \\
 \midrule
 $> 2$ & $> 100$ & Decisive for $H_0$ (no migration) \\
 $1$ to $2$ & $10$ to $100$ & Strong for $H_0$ \\
 $0.5$ to $1$ & $3.2$ to $10$ & Substantial for $H_0$ \\
 $0$ to $0.5$ & $1$ to $3.2$ & Weak for $H_0$ \\
-$-0.5$ to $0$ & $0.32$ to $1$ & Weak for $H_1$ (migration exists) \\
+$-0.5$ to $0$ & $0.32$ to $1$ & Weak for $H_1$ (migration) \\
 $-1$ to $-0.5$ & $0.1$ to $0.32$ & Substantial for $H_1$ \\
 $-2$ to $-1$ & $0.01$ to $0.1$ & Strong for $H_1$ \\
 $< -2$ & $< 0.01$ & Decisive for $H_1$ \\
 \bottomrule
 \end{tabular}
-\caption{Jeffreys scale for interpreting Bayes factors}
+\caption{Jeffreys scale (Jeffreys, 1961) as used in the output. Because of
+(\ref{eq:bound}), the categories for $H_0$ above ``Substantial'' may be
+unattainable for small samples (Table~\ref{tab:bound}).}
 \label{tab:jeffreys}
 \end{table}
 
-\section{Posterior Density Estimation}
-
-\subsection{Kernel Density Estimation}
-
-Since we have MCMC samples $\{m_{ij}^{(1)}, m_{ij}^{(2)}, \ldots, m_{ij}^{(N)}\}$ from the posterior distribution, we estimate the posterior density using kernel density estimation (KDE).
-
-For a standard kernel density estimator:
-\begin{equation}
-\hat{p}(x) = \frac{1}{Nh} \sum_{t=1}^{N} K\left(\frac{x - m_{ij}^{(t)}}{h}\right)
-\end{equation}
-
-where $K(\cdot)$ is the kernel function and $h$ is the bandwidth.
-
-\subsection{Gaussian Kernel}
-
-BA3 uses a Gaussian kernel:
-\begin{equation}
-K(u) = \frac{1}{\sqrt{2\pi}} \exp\left(-\frac{u^2}{2}\right)
-\end{equation}
-
-The unnormalized form used in the implementation accumulates:
-\begin{equation}
-K_h(m) = \exp\left(-\frac{m^2}{2h^2}\right)
-\end{equation}
-
-\subsection{Boundary Correction via Reflection}
-
-Since migration rates are bounded below by zero ($m_{ij} \geq 0$), standard KDE would underestimate the density near the boundary. BA3 uses the \emph{reflection method} (Silverman, 1986) to correct for this boundary effect.
-
-The reflection method conceptually ``reflects'' each data point about the boundary, effectively doubling the contribution to the density estimate at the boundary. For estimation at $x = 0$:
-\begin{equation}
-\hat{p}(0 \mid \data) = \frac{2}{Nh\sqrt{2\pi}} \sum_{t=1}^{N} \exp\left(-\frac{(m_{ij}^{(t)})^2}{2h^2}\right)
-\end{equation}
-
-The factor of 2 accounts for the reflection.
-
-\subsection{Bandwidth Selection}
-
-BA3 uses two bandwidth values:
-
-\subsubsection{Reference Bandwidth}
-During MCMC sampling, a fixed reference bandwidth is used for accumulating kernel sums:
-\begin{equation}
-h_{\text{ref}} = 0.02
-\end{equation}
-
-\subsubsection{Silverman's Rule of Thumb}
-For final density estimation, the optimal bandwidth is computed using Silverman's rule:
-\begin{equation}
-h_{\text{opt}} = 1.06 \cdot \hat{\sigma} \cdot N^{-1/5}
-\end{equation}
-
-where $\hat{\sigma}$ is the sample standard deviation of the posterior samples:
-\begin{equation}
-\hat{\sigma} = \sqrt{\frac{1}{N}\sum_{t=1}^{N}(m_{ij}^{(t)})^2 - \left(\frac{1}{N}\sum_{t=1}^{N}m_{ij}^{(t)}\right)^2}
-\end{equation}
-
-A minimum bandwidth of $h_{\min} = 0.01$ is enforced to prevent numerical instability.
-
-\subsection{Histogram-Based Fallback}
-
-As a sanity check, BA3 also computes a histogram-based density estimate:
-\begin{equation}
-\hat{p}_{\text{hist}}(0 \mid \data) = \frac{n_{\text{near zero}}}{N \cdot \epsilon}
-\end{equation}
-
-where:
-\begin{itemize}
-    \item $n_{\text{near zero}}$ is the count of samples with $m_{ij} < \epsilon$
-    \item $\epsilon = 0.005$ is the threshold for ``near zero''
-\end{itemize}
-
-If the KDE estimate differs from the histogram estimate by more than a factor of 100, the histogram estimate is used as a fallback.
-
-\subsection{Complete Posterior Density Estimate}
-
-The final posterior density at zero is:
-\begin{equation}
-\boxed{\hat{p}(0 \mid \data) = \frac{2}{Nh_{\text{opt}}\sqrt{2\pi}} \sum_{t=1}^{N} \exp\left(-\frac{(m_{ij}^{(t)})^2}{2h_{\text{ref}}^2}\right)}
-\end{equation}
-
-Note: The implementation accumulates kernel values using $h_{\text{ref}}$ during MCMC but applies normalization using $h_{\text{opt}}$ at the end.
-
-\section{Kullback-Leibler Divergence}
-
-\subsection{Definition}
-
-The Kullback-Leibler (KL) divergence measures the information gained when updating from the prior distribution to the posterior distribution:
-\begin{equation}
-\KL(p_{\text{post}} \| p_{\text{prior}}) = \int p(m_{ij} \mid \data) \log \frac{p(m_{ij} \mid \data)}{p(m_{ij})} \, dm_{ij}
-\end{equation}
-
-This quantity is also known as the \emph{information gain} or \emph{relative entropy}.
-
-\subsection{Hybrid Analytical-Numerical Approach}
-
-A Gaussian approximation for KL divergence is inappropriate here because:
-\begin{enumerate}
-    \item The prior is Uniform$(0, \frac{1}{3})$ with bounded support, not Gaussian
-    \item The posterior is also bounded on $[0, \frac{1}{3}]$
-    \item Posteriors for migration rates are often highly skewed toward zero
-\end{enumerate}
-
-Instead, BA3 uses the \textbf{exact analytical prior density} combined with \textbf{kernel density estimation} for the posterior.
-
-\subsubsection{Analytical Prior}
-
-The prior density for off-diagonal migration rates is:
-\begin{equation}
-p(m_{ij}) =
-\begin{cases}
-3 & \text{if } m_{ij} \in [0, \frac{1}{3}] \\
-0 & \text{otherwise}
-\end{cases}
-\end{equation}
-
-\subsubsection{KDE for Posterior}
-
-The posterior density is estimated using kernel density estimation with a Gaussian kernel and reflection boundary correction (as described in Section 4):
-\begin{equation}
-\hat{p}(m \mid \data) = \frac{1}{Nh} \sum_{t=1}^{N} \left[ K\left(\frac{m - m^{(t)}}{h}\right) + K\left(\frac{m + m^{(t)}}{h}\right) \right]
-\end{equation}
-
-where $K(u) = \frac{1}{\sqrt{2\pi}} e^{-u^2/2}$ is the Gaussian kernel and the second term provides reflection at the boundary $m = 0$.
-
-\subsubsection{Simplification with Uniform Prior}
-
-Substituting the uniform prior into the KL divergence:
-\begin{align}
-\KL(\text{post} \| \text{prior}) &= \int_0^{1/3} \hat{p}(m \mid \data) \log \frac{\hat{p}(m \mid \data)}{3} \, dm \\
-&= \int_0^{1/3} \hat{p}(m \mid \data) \log \hat{p}(m \mid \data) \, dm - \int_0^{1/3} \hat{p}(m \mid \data) \log 3 \, dm \\
-&= \int_0^{1/3} \hat{p}(m \mid \data) \log \hat{p}(m \mid \data) \, dm - \log 3
-\end{align}
-
-Since the posterior integrates to 1 over its support. Recognizing that the first term is the negative differential entropy:
-\begin{equation}
-\boxed{\KL(\text{post} \| \text{prior}) = -H(\text{posterior}) - \log 3}
-\end{equation}
-
-where
-\begin{equation}
-H(\text{posterior}) = -\int_0^{1/3} \hat{p}(m \mid \data) \log \hat{p}(m \mid \data) \, dm
-\end{equation}
-
-\subsection{Numerical Integration}
-
-The integral is computed numerically using the trapezoidal rule over a fine grid on $[0, \frac{1}{3}]$:
-\begin{equation}
-\KL \approx \sum_{i=0}^{G-1} \hat{p}(m_i \mid \data) \log \frac{\hat{p}(m_i \mid \data)}{3} \cdot \Delta m
-\end{equation}
-
-where:
-\begin{itemize}
-    \item $G$ is the number of grid points (default: 1000)
-    \item $\Delta m = \frac{1}{3G}$ is the grid spacing
-    \item $m_i = i \cdot \Delta m$ for $i = 0, 1, \ldots, G-1$
-\end{itemize}
-
-\subsubsection{Handling Zero Density}
-
-When $\hat{p}(m_i \mid \data) = 0$, the integrand $p \log p$ is defined as 0 (by continuity, since $\lim_{p \to 0^+} p \log p = 0$). In practice, we skip grid points where the density falls below a small threshold $\epsilon_{\text{floor}} = 10^{-10}$.
-
-\subsection{Conversion to Bits}
-
-The KL divergence is reported in bits (base-2 logarithm) rather than nats:
-\begin{equation}
-\KL_{\text{bits}} = \frac{\KL_{\text{nats}}}{\ln 2} = \KL_{\text{nats}} \cdot \log_2 e
-\end{equation}
-
-where $\log_2 e \approx 1.4427$.
-
-\subsection{Interpretation}
-
-The KL divergence in bits can be interpreted as the expected number of additional bits needed to encode samples from the posterior using a code optimized for the prior:
-\begin{itemize}
-    \item \textbf{0 bits}: No information gained; posterior equals prior
-    \item \textbf{1 bit}: Data provide moderate information about migration rate
-    \item \textbf{2+ bits}: Data are highly informative; posterior is much more concentrated than prior
-    \item \textbf{Large values}: Strong evidence that migration rate is constrained to a narrow range
-\end{itemize}
-
-Note that the maximum possible KL divergence for a uniform prior on $[0, \frac{1}{3}]$ is unbounded above (approached as the posterior concentrates to a point mass).
-
-\section{Algorithm Summary}
+%======================================================================
+\section{Algorithm}
 
 \begin{algorithm}[H]
-\caption{Savage-Dickey Test and KL Divergence Computation}
+\caption{Savage--Dickey Bayes factors and KL information gain}
 \begin{algorithmic}[1]
-\State \textbf{Initialize:} $\text{kernelSum} \gets 0$, $\text{sumM} \gets 0$, $\text{sumM2} \gets 0$, $n_{\text{near}} \gets 0$, $N \gets 0$
-\State \textbf{Set constants:} $h_{\text{ref}} \gets 0.02$, $\epsilon \gets 0.005$, $\pi(0) \gets 3$, $G \gets 1000$
-\State \textbf{Initialize sample storage:} samples $\gets$ empty list
-\For{each MCMC sample $m$ (post burn-in)}
-    \State $\text{sumM} \gets \text{sumM} + m$
-    \State $\text{sumM2} \gets \text{sumM2} + m^2$
-    \State $\text{kernelSum} \gets \text{kernelSum} + \exp\left(-\frac{m^2}{2h_{\text{ref}}^2}\right)$
-    \State Append $m$ to samples
-    \If{$m < \epsilon$}
-        \State $n_{\text{near}} \gets n_{\text{near}} + 1$
-    \EndIf
-    \State $N \gets N + 1$
+\For{each route $(i,j)$, $j\neq i$}
+  \State $\text{sumM}\gets 0$, $\text{sumM2}\gets 0$, $\text{countZero}\gets 0$, $N\gets 0$, samples $\gets$ empty
 \EndFor
-\State $\hat{\mu} \gets \text{sumM} / N$
-\State $\hat{\sigma} \gets \sqrt{\text{sumM2}/N - \hat{\mu}^2}$
-\State $h_{\text{opt}} \gets \max(0.01, 1.06 \cdot \hat{\sigma} \cdot N^{-0.2})$
-\State \Comment{Savage-Dickey Bayes Factor}
-\State $\hat{p}(0|\data) \gets \frac{2 \cdot \text{kernelSum}}{N \cdot h_{\text{opt}} \cdot \sqrt{2\pi}}$
-\State $\hat{p}_{\text{hist}} \gets n_{\text{near}} / (N \cdot \epsilon)$
-\If{$\hat{p}(0|\data) < 0.01 \cdot \hat{p}_{\text{hist}}$ \textbf{or} $\hat{p}(0|\data) > 100 \cdot \hat{p}_{\text{hist}}$}
-    \State $\hat{p}(0|\data) \gets \hat{p}_{\text{hist}}$ \Comment{Fallback to histogram}
-\EndIf
-\State $\BF_{01} \gets \hat{p}(0|\data) / \pi(0)$
-\State \Comment{KL Divergence via Numerical Integration}
-\State $\Delta m \gets \frac{1}{3G}$
-\State $\KL \gets 0$
-\For{$i = 0$ to $G-1$}
-    \State $m_i \gets i \cdot \Delta m$
-    \State $\hat{p}_i \gets \frac{1}{Nh_{\text{opt}}} \sum_{t=1}^{N} \left[ K\left(\frac{m_i - \text{samples}[t]}{h_{\text{opt}}}\right) + K\left(\frac{m_i + \text{samples}[t]}{h_{\text{opt}}}\right) \right]$
-    \If{$\hat{p}_i > 10^{-10}$}
-        \State $\KL \gets \KL + \hat{p}_i \cdot \log(\hat{p}_i / 3) \cdot \Delta m$
+\For{each iteration $t > \text{burn-in}$ with $t \bmod s = 0$}
+  \For{each route $(i,j)$, $j\neq i$}
+    \State $m \gets m_{ij}$; $\text{sumM}\gets\text{sumM}+m$; $\text{sumM2}\gets\text{sumM2}+m^2$; append $m$ to samples
+    \If{\texttt{migrantCounts[i][j][1]} $+$ \texttt{migrantCounts[i][j][2]} $=0$}
+      \State $\text{countZero}\gets\text{countZero}+1$
     \EndIf
+    \State $N\gets N+1$
+  \EndFor
 \EndFor
-\State $\KL_{\text{bits}} \gets \KL \cdot \log_2 e$
-\State \Return $\BF_{01}$, $\log_{10}(\BF_{01})$, $\KL_{\text{bits}}$
+\For{each destination $i$}
+  \State $n_i \gets \sum_{j}\sum_{a=0}^{2}$ \texttt{migrantCounts[i][j][a]} \Comment{individuals sampled in $i$}
+  \State $B_i \gets (n_i+K-1)/(K-1)$ \Comment{largest attainable $\BF_{01}$}
+  \For{each source $j\neq i$}
+    \If{$N<100$} \State report ``Insufficient samples''; \textbf{continue} \EndIf
+    \State $\hat p \gets \text{countZero}/N$
+    \If{$\text{countZero}=0$} \State $\BF_{01}\gets B_i/N$, marked ``$<$''
+    \Else \State $\BF_{01}\gets \hat p\, B_i$ \EndIf
+    \State $\hat\sigma\gets\sqrt{\text{sumM2}/N-(\text{sumM}/N)^2}$; $h\gets 1.06\,\hat\sigma\,N^{-1/5}$; \textbf{if} $h<10^{-6}$ \textbf{then} $h\gets 0.01$
+    \State $\KL \gets \sum_{g=0}^{G-1} \hat p(m_g)\log_2\!\big(\hat p(m_g)/p(m_g)\big)\,\Delta m$, $m_g=(g+\frac12)\Delta m$, $\Delta m=\frac{1}{3G}$, $p(m)$ from (\ref{eq:marginalprior})
+    \State report mean, SD, $\hat p$, $\BF_{01}$, $\log_{10}\BF_{01}$, $\max(\KL,0)$, interpretation
+  \EndFor
+\EndFor
 \end{algorithmic}
 \end{algorithm}
 
-\section{Implementation Details}
+%======================================================================
+\section{Implementation}
 
-\subsection{Data Structure}
-
-The statistics are accumulated in the \texttt{SavageDickeyStats} structure:
+The code is in \texttt{src/main.cpp} (functions \texttt{initSavageDickeyStats},
+\texttt{updateSavageDickeyStats}, \texttt{computeKDEatPoint},
+\texttt{computeKLDivergence} and \texttt{computeSavageDickeyBayesFactors}), with
+the statistics held in
 \begin{verbatim}
 struct SavageDickeyStats {
-    double kernelSum;           // Sum of kernel evaluations at zero
-    double sumM;                // Running sum of m (for mean)
-    double sumM2;               // Running sum of m^2 (for variance)
-    long int countNearZero;     // Count where m < 0.005
-    long int nSamples;          // Total sample count
-    std::vector<double> samples; // Stored samples for KL computation
+    double sumM;                 // running sum of m_ij (mean)
+    double sumM2;                // running sum of m_ij^2 (SD)
+    long int countZero;          // recorded states with c_ij = 0
+    long int nSamples;           // recorded states N
+    std::vector<double> samples; // m_ij samples, for the KL estimate
 };
 \end{verbatim}
+\texttt{updateSavageDickeyStats} is called in the sampling block of the main
+loop, after burn-in and every \texttt{-n} iterations, with the current
+migration rates and ancestry counts. Storing the samples for the KL estimate
+needs $O(NK^2)$ memory. The Bayes factor itself needs only the counter
+\texttt{countZero}.
 
-\subsection{Online vs.\ Stored Computation}
+%======================================================================
+\section{Validation}
 
-For the Savage-Dickey test, statistics are updated incrementally using Welford-style online algorithms:
-\begin{align}
-\bar{m}_N &= \frac{1}{N}\sum_{t=1}^{N} m^{(t)} = \frac{\text{sumM}}{N} \\
-\hat{\sigma}^2_N &= \frac{\text{sumM2}}{N} - \left(\frac{\text{sumM}}{N}\right)^2
-\end{align}
+\texttt{tests/exact\_posterior.py} computes the exact BA3 posterior for tiny data
+sets by enumerating all $(2K-1)^{N}$ ancestry assignments, with $m$, the allele
+frequencies and $F$ integrated out. It reports the exact
+$\Pr(c_{ij}=0\mid\data)$ and $\BF_{01}$ from (\ref{eq:bf});
+\texttt{tests/exact\_posterior\_hier.py} does the same under \texttt{-H}.
+\texttt{tests/check\_exact.py} runs BA3 with several seeds and compares the
+reported \texttt{Pr(c=0)} and \texttt{BF\_01} (and all other posterior summaries)
+with the exact values by $z$-scores. When the change was made, the standard
+sampler, \texttt{-c} and \texttt{-c -H} all passed (largest $|z|=2.1$; commit
+\texttt{52be5a1}). The test
+compares BA3's estimate with the exact $\Pr(c_{ij}=0\mid\data)$, so it checks
+the sampling of ancestries and the reported numbers. The derivation of
+(\ref{eq:bf}) from (\ref{eq:sd}) is checked by the two simulations of
+Sections~\ref{sec:model} and~\ref{sec:props}, which run BA3's migration move
+directly.
 
-For the KL divergence, samples must be stored to evaluate the KDE at arbitrary grid points during numerical integration. The memory requirement is $O(N \cdot P^2)$ where $N$ is the number of post-burn-in samples and $P$ is the number of populations. For typical analyses ($N \approx 2500$ samples, $P \leq 10$ populations), this requires approximately 2 MB of storage.
+%======================================================================
+\section{Versions 3.4.0--3.5.0 (superseded)}
+\label{sec:old}
 
-\section{Limitations and Considerations}
-
-\subsection{Bandwidth Sensitivity}
-
-The Savage-Dickey test relies on accurate density estimation at a single point (zero). This estimate is sensitive to:
-\begin{itemize}
-    \item Bandwidth selection
-    \item Number of MCMC samples
-    \item Posterior concentration near the boundary
-\end{itemize}
-
-\subsection{Boundary Effects}
-
-The reflection method assumes the density is symmetric about the boundary, which may not hold for all posteriors. When the posterior mass is concentrated away from zero, this has minimal impact.
-
-\subsection{KL Divergence Numerical Integration}
-
-The numerical integration for KL divergence depends on:
-\begin{itemize}
-    \item \textbf{Grid resolution}: Finer grids improve accuracy but increase computation time. The default of 1000 grid points provides a good balance.
-    \item \textbf{KDE accuracy}: The quality of the posterior density estimate affects the KL divergence. Sufficient MCMC samples (typically $>$1000) are needed.
-    \item \textbf{Density floor}: Very small density values can cause numerical instability in $\log(\hat{p})$. Values below $10^{-10}$ are treated as zero.
-\end{itemize}
-
-The hybrid approach using the exact uniform prior avoids the Gaussian approximation errors that would occur with bounded, skewed posteriors.
-
-\section{References}
+Versions 3.4.0 to 3.5.0 estimated the posterior density at zero from the
+samples of $m_{ij}$ by a Gaussian kernel density estimate, reflected at $0$,
+and divided it by a prior density of $3$. The method has two errors.
 
 \begin{enumerate}
-    \item Cover, T.M. \& Thomas, J.A. (2006). \emph{Elements of Information Theory} (2nd ed.). Wiley-Interscience. [KL divergence and differential entropy]
+\item \textbf{Inconsistent bandwidth.} The kernel sum
+$S=\sum_t \exp\!\big(-(m^{(t)})^2/2h_{\text{ref}}^2\big)$ was accumulated during
+the run with a fixed $h_{\text{ref}}=0.02$, but normalized at the end with
+Silverman's bandwidth $h_{\text{opt}}$:
+$\hat p(0\mid\data)=2S/(N h_{\text{opt}}\sqrt{2\pi})$. When the posterior is
+concentrated near zero, $h_{\text{opt}}\ll h_{\text{ref}}$ and the density at
+zero is overstated by roughly $h_{\text{ref}}/h_{\text{opt}}$. A histogram
+estimate, the fraction of samples with $m_{ij}<0.005$ divided by $0.005$, was
+substituted only when the two differed by more than a factor of 100.
 
-    \item Dickey, J.M. (1971). The weighted likelihood ratio, linear hypotheses on normal location parameters. \emph{Annals of Mathematical Statistics}, 42, 204--223.
+\item \textbf{Wrong prior density.} The prior density at zero was taken as $3$,
+as if each $m_{ij}$ were Uniform$(0,\frac13)$. The prior that BA3 samples is
+(\ref{eq:dirprior}), with density $3(K-1)$ at zero (\ref{eq:prior0}). For $K>2$
+this overstated $\BF_{01}$ by a further factor of $K-1$, and the histogram
+fallback had the same error.
+\end{enumerate}
 
-    \item Jeffreys, H. (1961). \emph{Theory of Probability} (3rd ed.). Oxford University Press.
+Together these overstated $\BF_{01}$ by a factor of about 30 in a
+10-population example (commit \texttt{52be5a1}).
+Evidence for $H_0$ reported by these versions, especially ``Strong'' or
+``Decisive'' for no migration, should be recomputed with BA3 3.6.0 or later.
+The KL column of these versions used the same Uniform$(0,\frac13)$ prior.
+Sampling was not affected: with the Bayes-factor table excluded, 3.6.0 output
+is byte-identical to 3.5.0 for the same seed (\texttt{tests/regress\_default.sh
+--no-sd}).
 
-    \item Silverman, B.W. (1986). \emph{Density Estimation for Statistics and Data Analysis}. Chapman \& Hall. [KDE and boundary correction]
+%======================================================================
+\section*{References}
 
-    \item Verdinelli, I. \& Wasserman, L. (1995). Computing Bayes factors using a generalization of the Savage-Dickey density ratio. \emph{Journal of the American Statistical Association}, 90, 614--618.
-
-    \item Wagenmakers, E.J., Lodewyckx, T., Kuriyal, H., \& Grasman, R. (2010). Bayesian hypothesis testing for psychologists: A tutorial on the Savage-Dickey method. \emph{Cognitive Psychology}, 60, 158--189.
+\begin{enumerate}
+\item Dickey, J.M. (1971). The weighted likelihood ratio, linear hypotheses on normal location parameters. \emph{Annals of Mathematical Statistics}, 42, 204--223.
+\item Gelfand, A.E. \& Smith, A.F.M. (1990). Sampling-based approaches to calculating marginal densities. \emph{Journal of the American Statistical Association}, 85, 398--409.
+\item Jeffreys, H. (1961). \emph{Theory of Probability} (3rd ed.). Oxford University Press.
+\item Silverman, B.W. (1986). \emph{Density Estimation for Statistics and Data Analysis}. Chapman \& Hall.
+\item Verdinelli, I. \& Wasserman, L. (1995). Computing Bayes factors using a generalization of the Savage--Dickey density ratio. \emph{Journal of the American Statistical Association}, 90, 614--618.
+\item Wagenmakers, E.J., Lodewyckx, T., Kuriyal, H. \& Grasman, R. (2010). Bayesian hypothesis testing for psychologists: a tutorial on the Savage--Dickey method. \emph{Cognitive Psychology}, 60, 158--189.
+\item Wilson, G.A. \& Rannala, B. (2003). Bayesian inference of recent migration rates using multilocus genotypes. \emph{Genetics}, 163, 1177--1191.
 \end{enumerate}
 
 \end{document}
