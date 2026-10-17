@@ -22,7 +22,7 @@
 
 \title{The Savage--Dickey Test for Zero Migration in BA3}
 \author{BA3 Technical Documentation}
-\date{BA3 3.6.0 and later}
+\date{BA3 3.6.0 and later; option \texttt{-B} from the release after 3.6.1}
 
 \begin{document}
 
@@ -46,8 +46,20 @@ individuals sampled in $i$, and $K$ is the number of populations. The estimate
 is exact up to Monte Carlo error: there is no bandwidth or threshold to choose.
 It shows that the evidence for $H_0$ can never exceed $(n_i+K-1)/(K-1)$, so
 it grows with the number of individuals sampled, not with the number of loci.
-Section~\ref{sec:old} describes the kernel-density estimator used in versions
-3.4.0--3.5.0 and the two errors that made it overstate $\BF_{01}$.
+
+By default $\Pr(c_{ij}=0\mid\data)$ is estimated by the fraction of MCMC states
+with no migrant on the route. When migration is strongly supported no state has
+$c_{ij}=0$, and only a resolution limit can be printed. The option \texttt{-B}
+(Section~\ref{sec:exactbf}) instead averages, over the states, the exact
+probability that no sampled individual is a migrant given the state's migration
+rates, allele frequencies and inbreeding coefficients. This estimate is positive
+on every route, so $\BF_{01}$ is estimated however strong the evidence for
+migration. Together the two results show that migration is far easier to detect
+than to exclude: a single clearly identified migrant can make the evidence for
+migration overwhelming, while the evidence against it is capped by the number of
+individuals sampled. Section~\ref{sec:old} describes the kernel-density estimator
+used in versions 3.4.0--3.5.0 and the two errors that made it overstate
+$\BF_{01}$.
 \end{abstract}
 
 \tableofcontents
@@ -325,8 +337,26 @@ $K$ & 10 & 20 & 50 & 100 & 200 \\
 
 \paragraph{Evidence for migration is unbounded.}
 $\BF_{01}\to 0$ as $\Pr(c_{ij}=0\mid\data)\to 0$, so the evidence for
-migration can be arbitrarily strong. It is limited in practice only by the
-Monte Carlo sample size (Section~\ref{sec:mc}).
+migration can be arbitrarily strong. The default estimator cannot measure it
+once $\Pr(c_{ij}=0\mid\data)$ is below about $1/N$ for $N$ recorded states
+(Section~\ref{sec:mc}); the estimator of Section~\ref{sec:exactbf}
+(\texttt{-B}) can.
+
+\paragraph{Migration is easier to detect than to exclude.}
+The two previous properties are asymmetric. Evidence for migration on a route
+needs only one sampled individual whose genotypes clearly place it as a migrant
+or the offspring of one; evidence against migration needs many individuals, none
+of which is a migrant, and is capped by (\ref{eq:bound}) however many loci are
+typed. In the Malagasy palm data set BN (52 individuals from 8 populations,
+6--7 each, 5,524 SNPs; \texttt{-c -H}), no absent route can exceed
+$\BF_{01}=(7+7)/7=2.0$, and all 53 are ``Weak for $H_0$''. One individual in
+population BN4, with probability 1 a second-generation migrant from BN3, gives
+$\log_{10}\BF_{01}\approx -176$ for that route with \texttt{-B}, although $m$ is
+barely estimated ($0.05\pm0.03$). Decisive evidence for migration is evidence
+under the BA3 model: in the same data, 6 of the 7 individuals in BN1 are
+assigned as second-generation migrants from BN2 ($\log_{10}\BF_{01}\approx
+-1031$), a pattern that can also arise when two samples are not distinct
+populations.
 
 \paragraph{Relation to interval-null estimators.}
 A common way to estimate (\ref{eq:sd}) from MCMC output is to replace the point
@@ -549,6 +579,24 @@ Column & Meaning \\
 A footer gives the formula, and the range of the bound (\ref{eq:bound}) over the
 populations in the data set.
 
+With \texttt{-B}, a second table follows, headed ``Exact Savage-Dickey Test for
+Zero Migration'' and stating how many states were evaluated:
+\begin{center}
+\small
+\begin{tabular}{ll}
+\toprule
+Column & Meaning \\
+\midrule
+\texttt{Source}, \texttt{Dest} & population indices $j$ and $i$ \\
+\texttt{Pr(c=0)} & $\widetilde{\Pr}(c_{ij}=0\mid\data)$ of Section~\ref{sec:exactbf}; \texttt{\textasciitilde 0} when below $10^{-300}$ \\
+\texttt{BF\_01} & $\widetilde{\BF}_{01}$, printed as \texttt{1e}$k$ when below $10^{-300}$ \\
+\texttt{log10(BF)} & $\log_{10}\widetilde{\BF}_{01}$ \\
+\texttt{Interpretation} & Jeffreys scale, Table~\ref{tab:jeffreys} \\
+\bottomrule
+\end{tabular}
+\end{center}
+Where both tables give a value, they agree within Monte Carlo error.
+
 \begin{table}[h]
 \centering
 \begin{tabular}{lll}
@@ -605,6 +653,30 @@ unattainable for small samples (Table~\ref{tab:bound}).}
 \end{algorithmic}
 \end{algorithm}
 
+\begin{algorithm}[H]
+\caption{Exact Bayes factors (\texttt{-B}~$K$), one evaluation}
+\begin{algorithmic}[1]
+\If{collapsed sampler}
+  \State draw $p_{sl}\sim\mathrm{Dirichlet}(\alpha_{sla}+n_{sla})$ for every population $s$ and locus $l$ \Comment{own RNG stream}
+\Else
+  \State take $p$ from the current state
+\EndIf
+\State tabulate $p_{sla}$ and $F_sp_{sla}+(1-F_s)p_{sla}^2$ for every $s,l,a$
+\For{each individual $k$, sampled in population $i$}
+  \State $\ell^{\mathrm{pure}}_s \gets \log\Pr(G_k\mid\text{both genes from } s, F_s)$ for every $s$ \Comment{observed loci only}
+  \State $\ell^{\mathrm{hyb}}_s \gets \log\Pr(G_k\mid\text{one gene from } s\text{, one from } i)$ for every $s\neq i$
+  \State $c_0 \gets \log(1-3\textstyle\sum_{j\neq i} m_{ij}) + \ell^{\mathrm{pure}}_i$
+  \State $c_{1s} \gets \log m_{is}+\ell^{\mathrm{pure}}_s$ and $c_{2s}\gets\log 2m_{is}+\ell^{\mathrm{hyb}}_s$ for every $s\neq i$
+  \State $T \gets \mathrm{logsumexp}(c_0, c_{1s}, c_{2s}: s\neq i)$
+  \For{each source $j\neq i$}
+    \State $A_{ij} \gets A_{ij} + \mathrm{logsumexp}(c_0, c_{1s}, c_{2s}: s\neq i,j) - T$ \Comment{$\log(1-q_{kj})$}
+  \EndFor
+\EndFor
+\State for every route: $S_{ij}\gets\mathrm{logsumexp}(S_{ij}, A_{ij})$; reset $A_{ij}\gets 0$; $T_{\mathrm{eval}}\gets T_{\mathrm{eval}}+1$
+\State \textbf{at the end:} $\log\widetilde{\Pr}(c_{ij}=0\mid\data) = S_{ij}-\log T_{\mathrm{eval}}$; $\log\widetilde{\BF}_{01} = \log\widetilde{\Pr} + \log\frac{n_i+K-1}{K-1}$
+\end{algorithmic}
+\end{algorithm}
+
 %======================================================================
 \section{Implementation}
 
@@ -627,6 +699,16 @@ migration rates and ancestry counts. Storing the samples for the KL estimate
 needs $O(NK^2)$ memory. The Bayes factor itself needs only the counter
 \texttt{countZero}.
 
+The \texttt{-B} estimator is in \texttt{struct ExactBF} and the functions
+\texttt{exactBFInit}, \texttt{exactBFStep}, \texttt{exactBFReport} and
+\texttt{exactBFFree}. \texttt{exactBFStep} is called next to
+\texttt{updateSavageDickeyStats}, on every $K$-th recorded state. The structure
+holds, per route, the log of the running sum of $w^{(t)}_{ij}$ and the
+current evaluation's $\sum_k\log(1-q_{kj})$; a mask of observed genotypes; the
+allele and homozygote probabilities of the current evaluation, stored
+contiguously by population, locus and allele; and its own random-number
+generator, seeded from the run's seed.
+
 %======================================================================
 \section{Validation}
 \label{sec:validation}
@@ -645,7 +727,9 @@ compares BA3's estimate with the exact $\Pr(c_{ij}=0\mid\data)$, so it checks
 the sampling of ancestries and the reported numbers. The derivation of
 (\ref{eq:bf}) from (\ref{eq:sd}) is checked by the two simulations of
 Sections~\ref{sec:model} and~\ref{sec:props}, which run BA3's migration move
-directly.
+directly. The \texttt{-B} estimator was checked against the same exact values
+(Section~\ref{sec:exactbf}); with \texttt{-B} off, the output of the standard
+sampler is byte-identical to 3.6.1 (\texttt{tests/regress\_default.sh}, 21 of 21).
 
 %======================================================================
 \section{Versions 3.4.0--3.5.0 (superseded)}
