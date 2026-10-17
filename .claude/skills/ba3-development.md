@@ -152,6 +152,15 @@ Output includes:
 - Bayes factors BF_01 = Pr(c=0) (n_i+K-1)/(K-1) (exact, Rao-Blackwellized;
   replaced the kernel estimate of 3.4.0-3.5.0), Jeffreys scale interpretation
 - Kullback-Leibler divergence (KDE posterior against the exact prior 3(K-1)(1-3m)^(K-2))
+- With `-B K` (`--bfexact`): a second table from every K-th recorded state, estimating
+  Pr(c=0) as the mean of prod_k (1 - q_kj) given m, p and F (ExactBF in main.cpp; with -c,
+  p is drawn from Dirichlet(prior + counts) on its own RNG stream). Positive where the
+  default table can only print "<"; does not change the chain. Costs one likelihood of
+  every individual under every ancestry per evaluated state.
+
+Other output options: `-e N` (`--traceint`) writes the trace every N iterations (each line
+recomputes the full log-likelihood); `-r NAME` (`--run`) prefixes every output file with
+NAME_, and the trace and BA3indiv.txt go to the directory of `-o`.
 
 ## Testing
 

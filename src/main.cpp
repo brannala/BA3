@@ -32,7 +32,7 @@ struct globalArgs {
 	int mciter;
 	int sampling;
 	int burnin;
-	char outfileName[100];
+	char outfileName[512];
 	int usingOutfile;
 	double deltaM;
 	double deltaA;
@@ -41,19 +41,22 @@ struct globalArgs {
 	int settings;
 	int genotypes;
 	int trace;
+	int traceInterval;       // write the trace every traceInterval iterations; 0 = the sampling interval
 	int debug;
 	int nolikelihood;
 	int autotune;
 	int collapse;            // integrate out allele frequencies (collapsed sampler); default off
 	int hier;                // hierarchical (F-model) allele-frequency prior; default off
+	int bfexact;             // exact Savage-Dickey BFs every bfexact-th recorded state; 0 = off
 	int useVCF;              // Use VCF input format
 	char vcfFileName[256];   // VCF file path
 	char metaFileName[256];  // Metadata file path (INDIV POPLN)
 	int usingFreqFile;       // Output allele frequencies to separate file
-	char freqFileName[256];  // Allele frequencies file path
+	char freqFileName[512];  // Allele frequencies file path
+	char runName[128];       // -r: prefix "NAME_" for every output file; empty = none
 } gArgs;
 
-static const char *optString = "s:i:n:b:o:m:a:f:V:M:F:cHvugtdphTN?";
+static const char *optString = "s:i:n:b:o:m:a:f:V:M:F:B:e:r:cHvugtdphTN?";
 
 static const struct option longOpts[] = {
 	{ "seed", required_argument, NULL, 's' },
@@ -73,11 +76,14 @@ static const struct option longOpts[] = {
 	{ "debug", no_argument, NULL, 'd' },
 	{ "help", no_argument, NULL, 'h' },
 	{ "trace", no_argument, NULL, 't' },
+	{ "traceint", required_argument, NULL, 'e' },
+	{ "run", required_argument, NULL, 'r' },
 	{ "nolikelihood", no_argument, NULL, 'p'},
 	{ "autotune", no_argument, NULL, 'T'},
 	{ "noautotune", no_argument, NULL, 'N'},
 	{ "collapse", no_argument, NULL, 'c'},
 	{ "hier", no_argument, NULL, 'H'},
+	{ "bfexact", required_argument, NULL, 'B'},
 	{ NULL, no_argument, NULL, 0 }
 };
 
@@ -871,6 +877,260 @@ static void resampleIBD(long ***cnt, long **cntN, const indiv& ind, unsigned cha
 
 // Inbreeding update, part 2: draw each population's F from its Beta
 // full-conditional given the current IBD indicators (uniform prior). O(noPopln).
+// -r/--run: insert "NAME_" before the file-name part of path (after any directory).
+static std::string withRunName(const std::string& path)
+{
+	if (!gArgs.runName[0] || path.empty()) return path;
+	size_t slash = path.find_last_of('/');
+	size_t at = (slash == std::string::npos) ? 0 : slash + 1;
+	return path.substr(0, at) + gArgs.runName + "_" + path.substr(at);
+}
+
+// Path of a fixed-name output file (BA3trace.txt, BA3indiv.txt): in the directory
+// of the results file (-o), with the run-name prefix if -r was given.
+static std::string auxOutputPath(const char *name)
+{
+	std::string o = gArgs.outfileName;
+	size_t slash = o.find_last_of('/');
+	std::string dir = (slash == std::string::npos) ? "" : o.substr(0, slash + 1);
+	return dir + withRunName(name);
+}
+
+//=============================================================================
+// Exact (Rao-Blackwellized) Savage-Dickey Bayes factors (-B/--bfexact).
+//
+// The default estimate of Pr(c_ij = 0 | data) is the fraction of recorded states
+// in which no individual sampled in population i is a migrant from j. When
+// migration is strongly supported no recorded state has c_ij = 0, and only the
+// bound "< scale/N" can be printed. Given the migration rates m, the allele
+// frequencies p and the inbreeding coefficients F, the ancestries of different
+// individuals are independent, so
+//
+//     Pr(c_ij = 0 | m, p, F, data) = prod_{k in i} (1 - q_kj),
+//
+// where q_kj is the conditional probability that individual k is a first- or
+// second-generation migrant from j. Averaging the product over the posterior
+// gives Pr(c_ij = 0 | data), positive even when no recorded state has c_ij = 0.
+// The collapsed sampler does not store p, so at each evaluation p is drawn from
+// its full conditional, Dirichlet(prior + gene-copy counts). Missing genotypes
+// are skipped (exact marginalization). The draws use their own random-number
+// stream, so -B does not change the chain or any other output.
+//=============================================================================
+struct ExactBF
+{
+	unsigned int K = 0, noLoci = 0;
+	long nEval = 0;
+	std::vector<double> logSumW, logSumW2;   // [i*K + j]: log sum of w and w^2 over evaluations
+	std::vector<double> acc;                 // [i*K + j]: sum_k log(1 - q_kj), one evaluation
+	std::vector<unsigned char> obs;          // [ind*noLoci + l]: 1 if the genotype is observed
+	// Per evaluation, on the probability scale, indexed [s*totA + off[l] + a]:
+	std::vector<size_t> off;                 // first allele of locus l
+	size_t totA = 0;                         // alleles summed over loci
+	std::vector<double> p;                   // allele frequency p_s,l,a
+	std::vector<double> hom;                 // homozygote probability F p + (1 - F) p^2
+	gsl_rng *rng = nullptr;
+};
+
+static inline double lse2(double a, double b)
+{
+	if (a == -INFINITY) return b;
+	if (b == -INFINITY) return a;
+	return a > b ? a + log1p(exp(b - a)) : b + log1p(exp(a - b));
+}
+
+// Multiply a running product (acc, with log offset lg) by a probability f. Most
+// factors are multiplied on the probability scale; the product is moved to the
+// log offset before it can underflow, and very small factors (including 0) go
+// straight to the log scale. This avoids an exp/log per locus.
+static inline void mulAcc(double& acc, double& lg, double f)
+{
+	if (f < 1e-100) { lg += log(f); return; }
+	acc *= f;
+	if (acc < 1e-200) { lg += log(acc); acc = 1.0; }
+}
+
+static void exactBFInit(ExactBF& E, indiv *ind, unsigned int noIndiv, unsigned int noLoci,
+                        unsigned int *noAlleles, unsigned int noPopln, unsigned long seed)
+{
+	E.K = noPopln; E.noLoci = noLoci; E.nEval = 0;
+	E.logSumW.assign((size_t)noPopln * noPopln, -INFINITY);
+	E.logSumW2.assign((size_t)noPopln * noPopln, -INFINITY);
+	E.acc.assign((size_t)noPopln * noPopln, 0.0);
+	E.obs.assign((size_t)noIndiv * noLoci, 1);
+	for (unsigned int k = 0; k < noIndiv; k++)
+		for (int l : ind[k].missingGenotypes) E.obs[(size_t)k * noLoci + l] = 0;
+	E.off.resize(noLoci);
+	E.totA = 0;
+	for (unsigned int l = 0; l < noLoci; l++) { E.off[l] = E.totA; E.totA += noAlleles[l] > 0 ? noAlleles[l] : 1; }
+	E.p.assign((size_t)noPopln * E.totA, 0.0);
+	E.hom.assign((size_t)noPopln * E.totA, 0.0);
+	E.rng = gsl_rng_alloc(gsl_rng_taus);
+	gsl_rng_set(E.rng, seed * 2654435761UL + 97531UL);
+}
+
+// One evaluation in the current state. alleleFreqs: the standard sampler's
+// frequencies (null with -c); cnt: the collapsed sampler's count tables (null
+// without -c).
+static void exactBFStep(ExactBF& E, indiv *ind, unsigned int noIndiv, unsigned int *noAlleles,
+                        double **migrationRates, double ***alleleFreqs, double *FStat,
+                        long ***cnt)
+{
+	const unsigned int K = E.K, L = E.noLoci;
+	const size_t TA = E.totA;
+	std::vector<double> alpha, theta;
+	for (unsigned int s = 0; s < K; s++)
+		for (unsigned int l = 0; l < L; l++)
+		{
+			unsigned int A = noAlleles[l]; if (A == 0) continue;
+			double *ps = &E.p[s * TA + E.off[l]];
+			if (cnt)   // collapsed sampler: draw p from Dirichlet(prior + counts)
+			{
+				alpha.resize(A); theta.resize(A);
+				for (unsigned int a = 0; a < A; a++)
+					alpha[a] = prAlpha(s, l, (int)a, ALLELE_PRIOR_ALPHA) + (double)cnt[s][l][a];
+				gsl_ran_dirichlet(E.rng, A, alpha.data(), theta.data());
+				for (unsigned int a = 0; a < A; a++) ps[a] = theta[a] > 1e-300 ? theta[a] : 1e-300;
+			}
+			else
+				for (unsigned int a = 0; a < A; a++) ps[a] = alleleFreqs[s][l][a];
+			const double F = FStat[s];
+			double *hs = &E.hom[s * TA + E.off[l]];
+			for (unsigned int a = 0; a < A; a++) hs[a] = F * ps[a] + (1.0 - F) * ps[a] * ps[a];
+		}
+	std::vector<double> het2(K);              // 2 (1 - F_s)
+	for (unsigned int s = 0; s < K; s++) het2[s] = 2.0 * (1.0 - FStat[s]);
+
+	std::fill(E.acc.begin(), E.acc.end(), 0.0);
+	std::vector<double> pa(K), pl(K), ha(K), hl(K), pure(K), hyb(K), c1(K), c2(K);
+	for (unsigned int k = 0; k < noIndiv; k++)
+	{
+		const unsigned int i = ind[k].samplePopln;
+		const GenotypeType (*g)[2] = ind[k].genotype;
+		const unsigned char *ob = &E.obs[(size_t)k * L];
+		std::fill(pa.begin(), pa.end(), 1.0); std::fill(pl.begin(), pl.end(), 0.0);
+		std::fill(ha.begin(), ha.end(), 1.0); std::fill(hl.begin(), hl.end(), 0.0);
+		const double *Pi = &E.p[i * TA];
+		for (unsigned int l = 0; l < L; l++)
+		{
+			if (!ob[l] || noAlleles[l] == 0) continue;
+			const size_t o = E.off[l];
+			const int a0 = g[l][0], a1 = g[l][1];
+			if (a0 == a1)
+			{
+				const double pi0 = Pi[o + a0];
+				for (unsigned int s = 0; s < K; s++)
+				{
+					mulAcc(pa[s], pl[s], E.hom[s * TA + o + a0]);
+					if (s != i) mulAcc(ha[s], hl[s], E.p[s * TA + o + a0] * pi0);
+				}
+			}
+			else
+			{
+				const double pi0 = Pi[o + a0], pi1 = Pi[o + a1];
+				for (unsigned int s = 0; s < K; s++)
+				{
+					const double ps0 = E.p[s * TA + o + a0], ps1 = E.p[s * TA + o + a1];
+					mulAcc(pa[s], pl[s], het2[s] * ps0 * ps1);
+					if (s != i) mulAcc(ha[s], hl[s], ps0 * pi1 + ps1 * pi0);
+				}
+			}
+		}
+		for (unsigned int s = 0; s < K; s++)
+		{
+			pure[s] = pl[s] + log(pa[s]);
+			hyb[s] = hl[s] + log(ha[s]);
+		}
+		// log prior x likelihood of the 2K-1 ancestries
+		double c0 = log(1.0 - 3.0 * migrationRates[i][K]) + pure[i];
+		double total = c0;
+		for (unsigned int s = 0; s < K; s++)
+		{
+			if (s == i) continue;
+			c1[s] = log(migrationRates[i][s]) + pure[s];
+			c2[s] = log(2.0 * migrationRates[i][s]) + hyb[s];
+			total = lse2(total, lse2(c1[s], c2[s]));
+		}
+		// log(1 - q_kj) = log(sum over ancestries other than "from j") - log(total)
+		for (unsigned int j = 0; j < K; j++)
+		{
+			if (j == i) continue;
+			double rest = c0;
+			for (unsigned int s = 0; s < K; s++)
+				if (s != i && s != j) rest = lse2(rest, lse2(c1[s], c2[s]));
+			E.acc[i * K + j] += rest - total;
+		}
+	}
+	for (unsigned int i = 0; i < K; i++)
+		for (unsigned int j = 0; j < K; j++)
+		{
+			if (i == j) continue;
+			double x = E.acc[i * K + j];
+			E.logSumW[i * K + j] = lse2(E.logSumW[i * K + j], x);
+			E.logSumW2[i * K + j] = lse2(E.logSumW2[i * K + j], 2.0 * x);
+		}
+	E.nEval++;
+}
+
+static const char *bfInterpretation(double log10BF)
+{
+	if (log10BF > 2) return "Decisive for H0";
+	if (log10BF > 1) return "Strong for H0";
+	if (log10BF > 0.5) return "Substantial for H0";
+	if (log10BF > 0) return "Weak for H0";
+	if (log10BF > -0.5) return "Weak for H1";
+	if (log10BF > -1) return "Substantial for H1";
+	if (log10BF > -2) return "Strong for H1";
+	return "Decisive for H1";
+}
+
+static void exactBFReport(const ExactBF& E, long int ***migrantCounts, int every, std::ostream& out)
+{
+	const unsigned int K = E.K;
+	out << "\n\n Exact Savage-Dickey Test for Zero Migration (-B, Rao-Blackwellized):\n";
+	out << " (" << E.nEval << " states, every " << every << (every == 1 ? "st" : "th")
+	    << " recorded state; Pr(c=0) = mean of prod_k (1 - q_kj) given m, p and F)\n\n";
+	if (E.nEval == 0) { out << " No states evaluated: use a smaller -B value or more iterations.\n"; return; }
+	out << " Source  Dest      Pr(c=0)       BF_01  log10(BF)  rel.SE  Interpretation\n";
+	out << " ---------------------------------------------------------------------------\n";
+	const double logM = log((double)E.nEval);
+	for (unsigned int i = 0; i < K; i++)
+	{
+		long ni = 0;
+		for (unsigned int j = 0; j < K; j++)
+			for (unsigned int age = 0; age < 3; age++) ni += migrantCounts[i][j][age];
+		const double logScale = log((ni + K - 1.0) / (K - 1.0));
+		for (unsigned int j = 0; j < K; j++)
+		{
+			if (i == j) continue;
+			const double logP0 = E.logSumW[i * K + j] - logM;
+			const double log10BF = (logP0 + logScale) / log(10.0);
+			// Monte Carlo relative standard error, treating evaluations as independent
+			double ratio = exp(E.logSumW2[i * K + j] + logM - 2.0 * E.logSumW[i * K + j]);
+			double relSE = ratio > 1.0 ? sqrt((ratio - 1.0) / (double)E.nEval) : 0.0;
+			std::ostringstream p0s, bfs;
+			p0s << std::setprecision(4) << (logP0 < -700 ? 0.0 : exp(logP0));
+			if (log10BF < -300) bfs << "1e" << (long)floor(log10BF);
+			else bfs << std::setprecision(3) << pow(10.0, log10BF);
+			out << "  [" << std::setw(2) << j << "]  [" << std::setw(2) << i << "]  "
+			    << std::setw(11) << (logP0 < -700 ? "~0" : p0s.str())
+			    << std::setw(12) << bfs.str()
+			    << std::fixed << std::setprecision(2) << std::showpos << std::setw(11) << log10BF
+			    << std::noshowpos << std::setw(8) << relSE
+			    << "  " << bfInterpretation(log10BF) << "\n";
+			out.unsetf(std::ios::fixed);
+		}
+	}
+	out << " ---------------------------------------------------------------------------\n";
+	out << " q_kj = conditional probability that individual k (sampled in Dest) is a migrant from Source\n";
+	out << " rel.SE = Monte Carlo relative standard error of Pr(c=0), treating the evaluated states as independent\n";
+}
+
+static void exactBFFree(ExactBF& E)
+{
+	if (E.rng) gsl_rng_free(E.rng);
+	E.rng = nullptr;
+}
+
 static void drawF(unsigned int noPopln, double *FStat)
 {
 	for (unsigned int p = 0; p < noPopln; p++)
@@ -1055,17 +1315,20 @@ int main( int argc, char *argv[] )
 	gArgs.settings = 0;
 	gArgs.genotypes = 0;
 	gArgs.trace = 0;
+	gArgs.traceInterval = 0;
 	gArgs.debug = 0;
 	gArgs.nolikelihood=0;
 	gArgs.autotune = 1;  // autotune enabled by default
 	gArgs.collapse = 0;  // collapsed (integrated-frequency) sampler off by default
 	gArgs.hier = 0;      // hierarchical allele-frequency prior off by default
+	gArgs.bfexact = 0;   // exact Savage-Dickey Bayes factors off by default
 	gArgs.usingOutfile = 1;
 	gArgs.useVCF = 0;
 	gArgs.vcfFileName[0] = '\0';
 	gArgs.metaFileName[0] = '\0';
 	gArgs.usingFreqFile = 0;
 	gArgs.freqFileName[0] = '\0';
+	gArgs.runName[0] = '\0';
 
 	strncpy(gArgs.outfileName, "BA3out.txt", sizeof(gArgs.outfileName) - 1);
 	gArgs.outfileName[sizeof(gArgs.outfileName) - 1] = '\0';
@@ -1125,6 +1388,24 @@ int main( int argc, char *argv[] )
 				gArgs.trace++;
 				break;
 
+			case 'r':
+				if (strchr(optarg, '/') || optarg[0] == '\0') {
+					std::cerr << "error: -r/--run NAME must be a non-empty name without '/'\n";
+					exit(1);
+				}
+				strncpy(gArgs.runName, optarg, sizeof(gArgs.runName) - 1);
+				gArgs.runName[sizeof(gArgs.runName) - 1] = '\0';
+				break;
+
+			case 'e':
+				gArgs.traceInterval = atoi(optarg);
+				if (gArgs.traceInterval < 1) {
+					std::cerr << "error: -e/--traceint needs a positive number of iterations\n";
+					exit(1);
+				}
+				gArgs.trace = 1;
+				break;
+
 			case 'p':
 				gArgs.nolikelihood++;
 				break;
@@ -1143,6 +1424,14 @@ int main( int argc, char *argv[] )
 
 			case 'H':
 				gArgs.hier = 1;
+				break;
+
+			case 'B':
+				gArgs.bfexact = atoi(optarg);
+				if (gArgs.bfexact < 1) {
+					std::cerr << "error: -B/--bfexact needs a positive integer (evaluate every k-th recorded state)\n";
+					exit(1);
+				}
 				break;
 
 			case 'V':
@@ -1180,6 +1469,16 @@ int main( int argc, char *argv[] )
 				std::cout << "    -c, --collapse    integrate out allele frequencies (collapsed sampler; faster)\n";
 				std::cout << "    -H, --hier        hierarchical allele-frequency prior: shared ancestral\n";
 				std::cout << "                      frequencies and per-population drift theta (requires -c)\n";
+				std::cout << "    -r, --run NAME    prefix every output file with NAME_ (results file, trace,\n";
+				std::cout << "                      BA3indiv.txt and the -F frequency file); the trace and\n";
+				std::cout << "                      BA3indiv.txt are written to the directory of -o\n";
+				std::cout << "    -e, --traceint N  write the trace (-t) every N iterations instead of every\n";
+				std::cout << "                      -n iterations; each trace line recomputes the full\n";
+				std::cout << "                      log-likelihood, so a longer interval is faster (implies -t)\n";
+				std::cout << "    -B, --bfexact K   also compute exact (Rao-Blackwellized) Savage-Dickey Bayes\n";
+				std::cout << "                      factors from every K-th recorded state; use when the\n";
+				std::cout << "                      default table reports bounds (\"<\"). Slower: costs about\n";
+				std::cout << "                      one likelihood evaluation of every individual per state\n";
 				exit(0);
 
 			case '?':
@@ -1192,6 +1491,23 @@ int main( int argc, char *argv[] )
 		}
 
 		opt = getopt_long( argc, argv, optString, longOpts, &longIndex );
+	}
+
+	// The trace is written every -n iterations unless -e sets its own interval;
+	// each trace line recomputes the full log-likelihood, so a longer interval
+	// makes -t much cheaper.
+	if (gArgs.traceInterval == 0) gArgs.traceInterval = gArgs.sampling;
+
+	// -r NAME: prefix every output file name (after any directory part) with NAME_
+	if (gArgs.runName[0])
+	{
+		std::string o = withRunName(gArgs.outfileName), f = withRunName(gArgs.freqFileName);
+		if (o.size() >= sizeof(gArgs.outfileName) || f.size() >= sizeof(gArgs.freqFileName)) {
+			std::cerr << "error: output file name too long with run name\n";
+			exit(1);
+		}
+		strcpy(gArgs.outfileName, o.c_str());
+		if (gArgs.usingFreqFile) strcpy(gArgs.freqFileName, f.c_str());
 	}
 
 	if (gArgs.hier && !gArgs.collapse) {
@@ -1240,12 +1556,12 @@ int main( int argc, char *argv[] )
 
 	if (gArgs.trace)
 	{
-		tracefile.open("BA3trace.txt", std::ios::out);
+		tracefile.open(auxOutputPath("BA3trace.txt").c_str(), std::ios::out);
 	}
 
 	if (gArgs.genotypes)
 	{
-		indivout.open("BA3indiv.txt", std::ios::out);
+		indivout.open(auxOutputPath("BA3indiv.txt").c_str(), std::ios::out);
 	}
 
 	if (gArgs.nolikelihood)
@@ -1549,6 +1865,12 @@ common_processing:
 	}
 	initSavageDickeyStats(sdStats, noPopln);
 
+	// -B: exact (Rao-Blackwellized) Savage-Dickey Bayes factors
+	ExactBF exactBF;
+	long bfSampleCount = 0;
+	if (gArgs.bfexact)
+		exactBFInit(exactBF, sampleIndiv, noIndiv, noLoci, noAlleles, noPopln, aSeed);
+
 	for(unsigned int l=0; l<noPopln; l++)
 	{
 		for(unsigned int k=0; k<=noPopln; k++)
@@ -1772,6 +2094,8 @@ common_processing:
 	// Print pre-run summary
 	std::cout << "  Run Configuration:\n";
 	std::cout << "    Input:       " << infileName << "\n";
+	if (gArgs.runName[0])
+		std::cout << "    Run name:    " << gArgs.runName << "\n";
 	std::cout << "    Output:      " << gArgs.outfileName << "\n";
 	if (gArgs.usingFreqFile)
 		std::cout << "    Freq file:   " << gArgs.freqFileName << "\n";
@@ -2387,7 +2711,7 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 		}
 
 	// Print logL to trace file
-		if(gArgs.trace && ((i % gArgs.sampling)==0))
+		if(gArgs.trace && ((i % gArgs.traceInterval)==0))
 		{
 			double logLG=0.0, logLM=0.0;
 			logLG = genotypeLogL();
@@ -2465,7 +2789,7 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 		}
 
 		// Print migration rates to trace file
-		if(gArgs.trace && ((i % gArgs.sampling)==0))
+		if(gArgs.trace && ((i % gArgs.traceInterval)==0))
 		{
 			for (unsigned int l = 0; l < noPopln; l++)
 				for (unsigned int k = 0; k < noPopln; k++)
@@ -2498,6 +2822,10 @@ if (gArgs.autotune && i <= (unsigned int)gArgs.burnin && (i % AUTOTUNE_INTERVAL)
 
 			// Update Savage-Dickey statistics for migration rate hypothesis testing
 			updateSavageDickeyStats(sdStats, migrationRates, migrantCounts, noPopln);
+			if (gArgs.bfexact && !NOLIKELIHOOD && (++bfSampleCount % gArgs.bfexact) == 0)
+				exactBFStep(exactBF, sampleIndiv, noIndiv, noAlleles, migrationRates,
+				            gArgs.collapse ? nullptr : alleleFreqs, FStat,
+				            gArgs.collapse ? gCount : nullptr);
 
 			double dirAlpha[MAXALLELE];
 			double dirDraw[MAXALLELE];
@@ -2633,6 +2961,7 @@ if(gArgs.debug)
 	/* print results to output file */
 
 	mcmcout << "\nInput file: " << infileName << "\n";
+	if (gArgs.runName[0]) mcmcout << "Run name: " << gArgs.runName << "\n";
 	if (gArgs.settings)
 	{
 		mcmcout << "Random seed=" << gArgs.seed << " MCMC iterations=" << gArgs.mciter << " Burn-in=" << gArgs.burnin << " Sampling interval=" << gArgs.sampling << "\n";
@@ -2706,6 +3035,8 @@ mcmcout << "\n Population Labels:\n";
 
 	// Output Savage-Dickey test results for zero migration hypotheses
 	computeSavageDickeyBayesFactors(sdStats, migrantCounts, noPopln, mcmcout, poplnNames);
+	if (gArgs.bfexact)
+		exactBFReport(exactBF, migrantCounts, gArgs.bfexact, mcmcout);
 
 	mcmcout << "\n Inbreeding Coefficients:\n";
 	mcmcout << " Index  Population                     F(SD)          95% HPD\n";
@@ -2995,6 +3326,8 @@ mcmcout << "\n Population Labels:\n";
 
 	// Free Savage-Dickey statistics
 	freeSavageDickeyStats(sdStats, noPopln);
+	if (gArgs.bfexact)
+		exactBFFree(exactBF);
 
 	// Free GSL objects
 	gsl_permutation_free(p);

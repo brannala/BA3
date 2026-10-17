@@ -275,6 +275,9 @@ effects.
 | -V --vcf          | String                  | VCF input file (requires -M)                |
 | -M --meta         | String                  | Metadata file for VCF input                 |
 | -F --freqfile     | String                  | Output allele frequencies to separate file  |
+| -r --run          | String                  | Prefix every output file name with NAME_    |
+| -e --traceint     | Positive integer        | Trace interval in iterations (implies -t)   |
+| -B --bfexact      | Positive integer        | Exact Savage-Dickey Bayes factors from every K-th sample |
 
 **Table 1:** Options available for BA3 program
 
@@ -342,10 +345,32 @@ frequencies in TSV (tab-separated values) format, which is convenient for furthe
 ```
 This creates a file with columns: Population, Locus, Allele, Frequency, SD
 
-The option `-t (--trace)` specifies whether a trace output file is created that
-lists all the parameter values at each iteration. The option `-g` causes detailed information
+The option `-t (--trace)` specifies whether a trace output file, `BA3trace.txt`, is created
+that lists the log probability and the migration rates (and, with -H, the drift parameters) at
+each sampled iteration. The option `-g` causes detailed information
 regarding the individual multilocus genotypes and posterior probabilities of migrant ancestries
-to be written to a file named `BA3indiv.txt`.
+to be written to a file named `BA3indiv.txt`. Both files are written to the directory of the
+output file given by -o (the current directory by default).
+
+**Trace interval:** each line of the trace recomputes the full log-likelihood of the data,
+which can take as long as many MCMC iterations, so with a short sampling interval (-n) the
+trace can slow a run considerably. The option -e (--traceint) writes the trace every N
+iterations instead of every -n iterations, and turns the trace on; it changes no other
+output. For example,
+```
+./BA3 -c -n 25 -e 1000 -V data.vcf -M data_meta.txt
+```
+samples every 25 iterations for the estimates but writes a trace line only every 1000
+iterations.
+
+**Run name:** the option -r (--run) NAME prefixes every output file with `NAME_`: the output
+file, the trace, `BA3indiv.txt` and the -F frequency file. Runs with different names can then
+share a directory. For example,
+```
+./BA3 -c -t -s 2 -r seed2 -o results/out.txt -V data.vcf -M data_meta.txt
+```
+writes `results/seed2_out.txt` and `results/seed2_BA3trace.txt`. The run name is also printed
+in the output file.
 
 ### 4.5 VCF input options
 
@@ -493,9 +518,15 @@ migrant from j. This gives
 
 BF_01 = Pr(c=0) (n_i + K - 1)/(K - 1),
 
-where n_i is the number of individuals sampled in the destination. When no
-sampled state has c=0, BF_01 is reported as an upper bound (`<`), so the
-evidence for migration is at least as strong as stated.
+where n_i is the number of individuals sampled in the destination. Pr(c=0) is
+estimated by the fraction of the N sampled states in which no individual is a migrant
+on the route. When no sampled state has c=0 that fraction is 0, and BF_01 is printed
+as `<` the value that a single such state would give, (1/N)(n_i + K - 1)/(K - 1),
+with "or more" added to the interpretation. This value shows only the resolution of
+the run: it is not a guaranteed bound (with N independent samples, 1/N is only about a
+63% upper limit on Pr(c=0); a 95% limit is about 3/N), and it changes with the run
+length and the sampling interval, not with the data. To estimate BF_01 on such routes,
+use -B (below).
 
 The evidence for H0 is limited: BF_01 cannot exceed (n_i + K - 1)/(K - 1),
 however many loci are typed. With 50 individuals and 10 populations the maximum
@@ -508,6 +539,39 @@ density estimate that used inconsistent bandwidths, and divided by a prior
 density of 3 instead of 3(K-1). They overstated BF_01 for H0, by a factor of
 about 30 with 10 populations, and their "Decisive for H0" results should not be
 relied on.
+
+#### Exact Bayes factors for strongly supported routes (-B)
+
+With -B K (--bfexact K) BA3 also estimates Pr(c=0) without counting states. Given the
+migration rates, allele frequencies and inbreeding coefficients, the ancestries of
+different individuals are independent, so the probability that no individual in the
+destination is a migrant from the source is the product, over those individuals, of
+(1 - q), where q is an individual's probability of being a migrant from the source.
+BA3 averages this product over every K-th sampled state; with -c the allele frequencies
+are first drawn from their conditional distribution given the current state. The
+estimate is positive even when no sampled state has c=0, so BF_01 is estimated on
+routes where the default table can only print `<`. A second table is added after the
+default one:
+```
+ Exact Savage-Dickey Test for Zero Migration (-B, Rao-Blackwellized):
+ (1400 states, every 10th recorded state; Pr(c=0) = mean of prod_k (1 - q_kj) given m, p and F)
+
+ Source  Dest      Pr(c=0)       BF_01  log10(BF)  rel.SE  Interpretation
+ ---------------------------------------------------------------------------
+  [ 0]  [ 1]           ~0     1e-9408   -9407.24    1.00  Decisive for H1
+  [ 2]  [ 1]            1        78.1      +1.89    0.00  Strong for H0
+```
+`rel.SE` is the Monte Carlo relative standard error of Pr(c=0), treating the evaluated
+states as independent. For routes with overwhelming evidence for migration it is often
+near 1, because a few states dominate the average; the estimate of log10(BF) is then
+uncertain in its last digits but far beyond any threshold. Where both tables give a value
+they agree, and both agree with the exact posterior on small test data sets.
+
+Each evaluation computes the likelihood of every individual under every ancestry, so -B
+is slower than the default test: with 4,383 individuals, 2,000 loci and 8 populations an
+evaluation takes about 0.14 s. Use it when the default table reports `<`, and choose K so
+that a few hundred to a few thousand states are evaluated. -B does not change the chain:
+all other output is the same as without it.
 
 #### Inbreeding Coefficients
 ```
@@ -635,6 +699,12 @@ probably be merged into one population and the analysis repeated.
 
 ## 7 Version History
 
+- **Unreleased**: -B (--bfexact) adds exact (Rao-Blackwellized) Savage-Dickey Bayes factors,
+  which are estimated even where the default table can only print a bound (section 5.1).
+  -e (--traceint) sets a separate trace interval, and -r (--run) prefixes every output file
+  with a run name; the trace and `BA3indiv.txt` are written to the directory of the output
+  file (section 4.4). The description of the `<` values in the Savage-Dickey table is
+  corrected: they show the run's resolution, not a guaranteed bound.
 - **3.6.1** (October 2026): 95% highest posterior density (HPD) intervals for migration
   rates (a matrix below the posterior means), inbreeding coefficients and, with -H, drift
   parameters (section 5.1). Results are otherwise unchanged.
