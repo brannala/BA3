@@ -15,10 +15,37 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgsl-dev libhts-dev
+          sudo apt-get install -y libgsl-dev zlib1g-dev
 
-      - name: Build
-        run: make
+      # A static binary runs on any x86-64 Linux, whatever GSL or htslib it has.
+      # Ubuntu's htslib cannot be linked statically (it pulls in libcurl), so build
+      # a pinned htslib without network or CRAM-compression features; BA3 reads
+      # only VCF/BCF, which needs zlib alone.
+      - name: Build htslib (static)
+        env:
+          HTSLIB_VERSION: "1.24"
+          HTSLIB_SHA256: "28a8de191381c7a97a35675ceac76fa1ea95e7b678d6a2e9d600a7874e4077de"
+        run: |
+          curl -fsSL -o htslib.tar.bz2 "https://github.com/samtools/htslib/releases/download/${HTSLIB_VERSION}/htslib-${HTSLIB_VERSION}.tar.bz2"
+          echo "${HTSLIB_SHA256}  htslib.tar.bz2" | sha256sum -c -
+          tar xjf htslib.tar.bz2
+          cd "htslib-${HTSLIB_VERSION}"
+          ./configure --prefix="$HOME/htslib" --disable-libcurl --disable-gcs --disable-s3 \
+            --disable-bz2 --disable-lzma --without-libdeflate --disable-plugins
+          make -j"$(nproc)" lib-static
+          make install
+
+      - name: Build (statically linked)
+        run: |
+          make INCLFLAGS="-I$HOME/htslib/include" LIBFLAGS="-L$HOME/htslib/lib" \
+               LDLIBS="-static -lgsl -lgslcblas -lhts -lz -lm -lpthread"
+          strip BA3
+
+      - name: Check that the binary is static and runs
+        run: |
+          file BA3
+          if ldd BA3 >/dev/null 2>&1; then echo "error: BA3 is dynamically linked"; ldd BA3; exit 1; fi
+          ./BA3 -h | head -1
 
       - name: Create Linux archive
         run: |

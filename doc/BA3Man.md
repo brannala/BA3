@@ -61,7 +61,9 @@ Download the zip or tar.gz archived file with the latest version of the software
 [here](https://github.com/brannala/BA3/releases). Unzip the
 archive by double clicking the downloaded file. A folder will be created in your current
 directory containing the program executable file `BA3`, example data files (in subfolder
-examples), and this manual (in subfolder docs).
+examples), and this manual (in subfolder docs). From version 3.7.1 the Linux executable is
+statically linked: it needs no other libraries (such as GSL or htslib) and runs on any 64-bit
+x86 Linux.
 
 ### 1.4 Compiling the program
 
@@ -699,6 +701,9 @@ probably be merged into one population and the analysis repeated.
 
 ## 7 Version History
 
+- **3.7.1** (October 2026): The Linux release binary is statically linked, so it no longer
+  requires the GSL and htslib versions of the build machine (the 3.7.0 and earlier binaries
+  needed GSL 2.7). Results are unchanged.
 - **3.7.0** (October 2026): -B (--bfexact) adds exact (Rao-Blackwellized) Savage-Dickey Bayes factors,
   which are estimated even where the default table can only print a bound (section 5.1).
   -e (--traceint) sets a separate trace interval, and -r (--run) prefixes every output file

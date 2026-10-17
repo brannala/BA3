@@ -47,7 +47,7 @@
 
 using namespace std;
 
-const string VERSION="3.7.0";
+const string VERSION="3.7.1";
 const string RELEASEDATE="10/16/2026";
 
 // Unified limits - supports both SNP and microsatellite data
