@@ -920,7 +920,7 @@ struct ExactBF
 {
 	unsigned int K = 0, noLoci = 0;
 	long nEval = 0;
-	std::vector<double> logSumW, logSumW2;   // [i*K + j]: log sum of w and w^2 over evaluations
+	std::vector<double> logSumW;             // [i*K + j]: log of the sum of w over evaluations
 	std::vector<double> acc;                 // [i*K + j]: sum_k log(1 - q_kj), one evaluation
 	std::vector<unsigned char> obs;          // [ind*noLoci + l]: 1 if the genotype is observed
 	// Per evaluation, on the probability scale, indexed [s*totA + off[l] + a]:
@@ -954,7 +954,6 @@ static void exactBFInit(ExactBF& E, indiv *ind, unsigned int noIndiv, unsigned i
 {
 	E.K = noPopln; E.noLoci = noLoci; E.nEval = 0;
 	E.logSumW.assign((size_t)noPopln * noPopln, -INFINITY);
-	E.logSumW2.assign((size_t)noPopln * noPopln, -INFINITY);
 	E.acc.assign((size_t)noPopln * noPopln, 0.0);
 	E.obs.assign((size_t)noIndiv * noLoci, 1);
 	for (unsigned int k = 0; k < noIndiv; k++)
@@ -1066,7 +1065,6 @@ static void exactBFStep(ExactBF& E, indiv *ind, unsigned int noIndiv, unsigned i
 			if (i == j) continue;
 			double x = E.acc[i * K + j];
 			E.logSumW[i * K + j] = lse2(E.logSumW[i * K + j], x);
-			E.logSumW2[i * K + j] = lse2(E.logSumW2[i * K + j], 2.0 * x);
 		}
 	E.nEval++;
 }
@@ -1090,7 +1088,7 @@ static void exactBFReport(const ExactBF& E, long int ***migrantCounts, int every
 	out << " (" << E.nEval << " states, every " << every << (every == 1 ? "st" : "th")
 	    << " recorded state; Pr(c=0) = mean of prod_k (1 - q_kj) given m, p and F)\n\n";
 	if (E.nEval == 0) { out << " No states evaluated: use a smaller -B value or more iterations.\n"; return; }
-	out << " Source  Dest      Pr(c=0)       BF_01  log10(BF)  rel.SE  Interpretation\n";
+	out << " Source  Dest      Pr(c=0)       BF_01  log10(BF)  Interpretation\n";
 	out << " ---------------------------------------------------------------------------\n";
 	const double logM = log((double)E.nEval);
 	for (unsigned int i = 0; i < K; i++)
@@ -1104,9 +1102,6 @@ static void exactBFReport(const ExactBF& E, long int ***migrantCounts, int every
 			if (i == j) continue;
 			const double logP0 = E.logSumW[i * K + j] - logM;
 			const double log10BF = (logP0 + logScale) / log(10.0);
-			// Monte Carlo relative standard error, treating evaluations as independent
-			double ratio = exp(E.logSumW2[i * K + j] + logM - 2.0 * E.logSumW[i * K + j]);
-			double relSE = ratio > 1.0 ? sqrt((ratio - 1.0) / (double)E.nEval) : 0.0;
 			std::ostringstream p0s, bfs;
 			p0s << std::setprecision(4) << (logP0 < -700 ? 0.0 : exp(logP0));
 			if (log10BF < -300) bfs << "1e" << (long)floor(log10BF);
@@ -1115,14 +1110,13 @@ static void exactBFReport(const ExactBF& E, long int ***migrantCounts, int every
 			    << std::setw(11) << (logP0 < -700 ? "~0" : p0s.str())
 			    << std::setw(12) << bfs.str()
 			    << std::fixed << std::setprecision(2) << std::showpos << std::setw(11) << log10BF
-			    << std::noshowpos << std::setw(8) << relSE
+			    << std::noshowpos
 			    << "  " << bfInterpretation(log10BF) << "\n";
 			out.unsetf(std::ios::fixed);
 		}
 	}
 	out << " ---------------------------------------------------------------------------\n";
 	out << " q_kj = conditional probability that individual k (sampled in Dest) is a migrant from Source\n";
-	out << " rel.SE = Monte Carlo relative standard error of Pr(c=0), treating the evaluated states as independent\n";
 }
 
 static void exactBFFree(ExactBF& E)

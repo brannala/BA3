@@ -477,16 +477,16 @@ close to 1, and the averages over states are accumulated in log space. With
 
 \subsection{Monte Carlo error}
 
-The output reports the relative standard error
-\[
-\frac{\mathrm{SE}(\widetilde{\Pr})}{\widetilde{\Pr}} \approx
-\sqrt{\frac{1}{T}\left(\frac{\overline{w^2}}{\bar w^{\,2}}-1\right)},
-\]
-treating the evaluated states as independent. When $\Pr(c_{ij}=0\mid\data)$ is
-extremely small, $w^{(t)}_{ij}$ varies over many orders of magnitude and a few
-states dominate the average, so this error approaches 1: the estimate of
-$\log_{10}\BF_{01}$ is then uncertain in its last digits but is far beyond any
-decision threshold.
+No standard error is reported. When $\Pr(c_{ij}=0\mid\data)$ is extremely small,
+$w^{(t)}_{ij}$ varies over many orders of magnitude and a few states dominate the
+average. The usual estimate of the relative standard error,
+$\sqrt{(\overline{w^2}/\bar w^{\,2}-1)/T}$, then approaches 1 whatever the data,
+because $\overline{w^2}/\bar w^{\,2}\approx T$ when one term dominates; and it
+assumes the evaluated states are independent. In this regime $\log_{10}\BF_{01}$
+varies between runs in its last digits ($-9407$ and $-9485$ for two seeds on a
+simulated data set with 4,383 individuals) while being far beyond any decision
+threshold. Where the value is close to a threshold, $w^{(t)}_{ij}$ varies much
+less, and its precision is best judged by comparing runs with different seeds.
 
 \subsection{Validation}
 

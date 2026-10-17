@@ -556,16 +556,16 @@ default one:
  Exact Savage-Dickey Test for Zero Migration (-B, Rao-Blackwellized):
  (1400 states, every 10th recorded state; Pr(c=0) = mean of prod_k (1 - q_kj) given m, p and F)
 
- Source  Dest      Pr(c=0)       BF_01  log10(BF)  rel.SE  Interpretation
+ Source  Dest      Pr(c=0)       BF_01  log10(BF)  Interpretation
  ---------------------------------------------------------------------------
-  [ 0]  [ 1]           ~0     1e-9408   -9407.24    1.00  Decisive for H1
-  [ 2]  [ 1]            1        78.1      +1.89    0.00  Strong for H0
+  [ 0]  [ 1]           ~0     1e-9408   -9407.24  Decisive for H1
+  [ 2]  [ 1]            1        78.1      +1.89  Strong for H0
 ```
-`rel.SE` is the Monte Carlo relative standard error of Pr(c=0), treating the evaluated
-states as independent. For routes with overwhelming evidence for migration it is often
-near 1, because a few states dominate the average; the estimate of log10(BF) is then
-uncertain in its last digits but far beyond any threshold. Where both tables give a value
-they agree, and both agree with the exact posterior on small test data sets.
+For routes with overwhelming evidence for migration a few states dominate the average,
+so log10(BF) varies between runs in its last digits (-9407 and -9485 for two seeds in
+this example) while remaining far beyond any threshold. To judge the precision of a
+value close to a threshold, compare runs with different seeds. Where both tables give a
+value they agree, and both agree with the exact posterior on small test data sets.
 
 Each evaluation computes the likelihood of every individual under every ancestry, so -B
 is slower than the default test: with 4,383 individuals, 2,000 loci and 8 populations an
