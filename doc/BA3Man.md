@@ -1,4 +1,4 @@
-# BayesAss Edition 3.6 User's Manual
+# BayesAss Edition 3.7 User's Manual
 
 Bruce Rannala
 
@@ -699,7 +699,7 @@ probably be merged into one population and the analysis repeated.
 
 ## 7 Version History
 
-- **Unreleased**: -B (--bfexact) adds exact (Rao-Blackwellized) Savage-Dickey Bayes factors,
+- **3.7.0** (October 2026): -B (--bfexact) adds exact (Rao-Blackwellized) Savage-Dickey Bayes factors,
   which are estimated even where the default table can only print a bound (section 5.1).
   -e (--traceint) sets a separate trace interval, and -r (--run) prefixes every output file
   with a run name; the trace and `BA3indiv.txt` are written to the directory of the output

@@ -1450,8 +1450,8 @@ int main( int argc, char *argv[] )
 				break;
 
 			case 'h':
-				std::cout << "usage: BA3 [-sinbomaf] [-vhugptTNcH] file ..." << "\n";
-				std::cout << "       BA3 -V vcf_file -M meta_file [-sinbomaf] [-vhugptTNcH]" << "\n";
+				std::cout << "usage: BA3 [-sinbomafBer] [-vhugptTNcH] file ..." << "\n";
+				std::cout << "       BA3 -V vcf_file -M meta_file [-sinbomafBer] [-vhugptTNcH]" << "\n";
 				std::cout << "    mcmc analysis of recent migration rates\n\n";
 				std::cout << "  Input options:\n";
 				std::cout << "    file              BA3 format input file (default)\n";
@@ -1476,7 +1476,7 @@ int main( int argc, char *argv[] )
 				exit(0);
 
 			case '?':
-				std::cout << "usage: BA3 [-sinbomaf] [-vhugptTN] file ..." << "\n" << "    mcmc analysis of recent migration rates\n";
+				std::cout << "usage: BA3 [-sinbomafBer] [-vhugptTNcH] file ..." << "\n" << "    mcmc analysis of recent migration rates\n";
 				exit(0);
 
 			default:
@@ -1527,7 +1527,7 @@ int main( int argc, char *argv[] )
 			infileName[sizeof(infileName) - 1] = '\0';
 		} else {
 			std::cout << "error: no input file specified...\n";
-			std::cout << "usage: BA3 [-sinbomaf] [-vhugptTN] file ...\n";
+			std::cout << "usage: BA3 [-sinbomafBer] [-vhugptTNcH] file ...\n";
 			std::cout << "   or: BA3 -V vcf_file -M meta_file [options]\n";
 			exit(1);
 		}
