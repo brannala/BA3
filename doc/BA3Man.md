@@ -280,6 +280,8 @@ effects.
 | -r --run          | String                  | Prefix every output file name with NAME_    |
 | -e --traceint     | Positive integer        | Trace interval in iterations (implies -t)   |
 | -B --bfexact      | Positive integer        | Exact Savage-Dickey Bayes factors from every K-th sample |
+| -h --help         | None                    | Print the version and a summary of the options |
+|    --version      | None                    | Print the version and release date          |
 
 **Table 1:** Options available for BA3 program
 

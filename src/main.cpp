@@ -58,6 +58,9 @@ struct globalArgs {
 
 static const char *optString = "s:i:n:b:o:m:a:f:V:M:F:B:e:r:cHvugtdphTN?";
 
+// long-only options (values outside the char range used by short options)
+static const int OPT_VERSION = 256;
+
 static const struct option longOpts[] = {
 	{ "seed", required_argument, NULL, 's' },
 	{ "iterations", required_argument, NULL, 'i' },
@@ -84,6 +87,7 @@ static const struct option longOpts[] = {
 	{ "collapse", no_argument, NULL, 'c'},
 	{ "hier", no_argument, NULL, 'H'},
 	{ "bfexact", required_argument, NULL, 'B'},
+	{ "version", no_argument, NULL, OPT_VERSION},
 	{ NULL, no_argument, NULL, 0 }
 };
 
@@ -1449,7 +1453,12 @@ int main( int argc, char *argv[] )
 				gArgs.debug++;
 				break;
 
+			case OPT_VERSION:
+				std::cout << "BayesAss Edition " << VERSION << " (BA3), released " << RELEASEDATE << "\n";
+				exit(0);
+
 			case 'h':
+				std::cout << "BayesAss Edition " << VERSION << " (BA3), released " << RELEASEDATE << "\n\n";
 				std::cout << "usage: BA3 [-sinbomafBer] [-vhugptTNcH] file ..." << "\n";
 				std::cout << "       BA3 -V vcf_file -M meta_file [-sinbomafBer] [-vhugptTNcH]" << "\n";
 				std::cout << "    mcmc analysis of recent migration rates\n\n";
@@ -1472,7 +1481,10 @@ int main( int argc, char *argv[] )
 				std::cout << "    -B, --bfexact K   also compute exact (Rao-Blackwellized) Savage-Dickey Bayes\n";
 				std::cout << "                      factors from every K-th recorded state; use when the\n";
 				std::cout << "                      default table reports bounds (\"<\"). Slower: costs about\n";
-				std::cout << "                      one likelihood evaluation of every individual per state\n";
+				std::cout << "                      one likelihood evaluation of every individual per state\n\n";
+				std::cout << "  Other options:\n";
+				std::cout << "    -h, --help        print this help\n";
+				std::cout << "        --version     print the version and release date\n";
 				exit(0);
 
 			case '?':
