@@ -703,6 +703,9 @@ probably be merged into one population and the analysis repeated.
 
 ## 7 Version History
 
+- **3.7.2** (October 2026): `-h`, a run with no arguments and an invalid option now print the
+  version and release date; new `--version` option; an invalid option now exits with status 1.
+  Results are unchanged.
 - **3.7.1** (October 2026): The Linux release binary is statically linked, so it no longer
   requires the GSL and htslib versions of the build machine (the 3.7.0 and earlier binaries
   needed GSL 2.7). Results are unchanged.
