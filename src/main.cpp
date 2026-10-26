@@ -1491,7 +1491,7 @@ int main( int argc, char *argv[] )
 				std::cout << "BayesAss Edition " << VERSION << " (BA3), released " << RELEASEDATE << "\n\n";
 				std::cout << "usage: BA3 [-sinbomafBer] [-vhugptTNcH] file ..." << "\n" << "    mcmc analysis of recent migration rates\n";
 				std::cout << "    BA3 -h lists the options\n";
-				exit(0);
+				exit(1);
 
 			default:
 				/* You won't actually get here. */
