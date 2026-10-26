@@ -1488,7 +1488,9 @@ int main( int argc, char *argv[] )
 				exit(0);
 
 			case '?':
+				std::cout << "BayesAss Edition " << VERSION << " (BA3), released " << RELEASEDATE << "\n\n";
 				std::cout << "usage: BA3 [-sinbomafBer] [-vhugptTNcH] file ..." << "\n" << "    mcmc analysis of recent migration rates\n";
+				std::cout << "    BA3 -h lists the options\n";
 				exit(0);
 
 			default:
@@ -1538,9 +1540,11 @@ int main( int argc, char *argv[] )
 			strncpy(infileName, argv[optind], sizeof(infileName) - 1);
 			infileName[sizeof(infileName) - 1] = '\0';
 		} else {
+			std::cout << "BayesAss Edition " << VERSION << " (BA3), released " << RELEASEDATE << "\n\n";
 			std::cout << "error: no input file specified...\n";
 			std::cout << "usage: BA3 [-sinbomafBer] [-vhugptTNcH] file ...\n";
 			std::cout << "   or: BA3 -V vcf_file -M meta_file [options]\n";
+			std::cout << "   BA3 -h lists the options\n";
 			exit(1);
 		}
 	}
